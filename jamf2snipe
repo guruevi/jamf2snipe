@@ -338,7 +338,7 @@ def get_jamf_mobiles(filter_rsql=None):
     global USER_ARGS
     # Sections the user wants to retrieve, we require general and hardware for getting serial/asset numbers
     sections = {"GENERAL", "HARDWARE"}
-    if USER_ARGS.users or USER_ARGS.force:
+    if USER_ARGS.users or USER_ARGS.user_force:
         sections.add("USER_AND_LOCATION")
 
     for mapping in CONFIG['mobile_devices-api-mapping'].values():
@@ -568,16 +568,13 @@ def checkin_snipe_asset(asset_id, asset):
 def checkout_snipe_asset(username, asset):
     global USER_ARGS
 
-    if not USER_ARGS.users or not username:
+    if (not USER_ARGS.users and not USER_ARGS.users_force) or not username:
         return False
 
-    if not asset['available_actions']['checkout']:
-        logging.error(f"Asset {asset['name']} is not available for checkout")
-        return False
+    logging.info(f"Asset {asset['name']} is being checked out to {username}")
+    logging.debug(asset)
 
     user_id = get_snipe_user_id(username)
-
-    logging.info(f"Asset {username} is being checked out to {asset['name']}")
 
     if not user_id:
         logging.error(f"Unable to checkout asset: {asset['name']} to user {username}, user does not exist")
@@ -596,7 +593,7 @@ def checkout_snipe_asset(username, asset):
 
         logging.info(f"Asset {asset['id']} is already checked out to UID: {asset['assigned_to']['id']}")
 
-        if not USER_ARGS.force:
+        if not USER_ARGS.users_force:
             return False
 
         if not checkin_snipe_asset(asset['id'], asset):
@@ -772,7 +769,7 @@ def main():
             # Create a new asset
             logging.info(f"Creating a new asset in snipe for JAMF ID: {jamf_id}")
             asset['status_id'] = CONFIG['snipe-it']['default_status_id']
-            asset = create_snipe_asset(asset)
+            snipe_asset = [create_snipe_asset(asset)]
             # If new asset, then snipe update time = jamf update time
             snipe_update_time = jamf_update_time
         else:
@@ -809,7 +806,7 @@ def main():
                         del asset[snipe_field]
 
             if asset:
-                update_snipe_asset(snipe_asset[0]['id'], asset)
+                asset = update_snipe_asset(snipe_asset[0]['id'], asset)
 
         # Checking out
         # Username could be in assigned_to['user

@@ -10,9 +10,9 @@ password = $ecretJ@mfPassw0rd
 
 [cache]
 # This sets a URL cache timeout, useful for debugging or if you need to repeatedly run this script
-# (eg. with filters in a script). Set to 0 to disable caching.
-expire_after = 3600
-cache_location = /tmp/jamf2snipeit.cache
+# (eg. with filters in a script). Comment to disable caching (recommended).
+# expire_after = 3600
+# cache_location = /tmp/jamf2snipeit.cache
 
 [snipe-it]
 #Required
