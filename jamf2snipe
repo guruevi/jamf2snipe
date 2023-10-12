@@ -25,8 +25,6 @@ import argparse
 import logging
 from datetime import datetime, timedelta
 
-install_cache('/tmp/jamf2snipe.cache', backend='sqlite', expire_after=60 * 60 * 12)
-
 version = "1.0.5"
 
 JAMF_SUBSETS_COMPUTERS = {'general': 'GENERAL',
@@ -231,13 +229,19 @@ SNIPE_HEADERS = {'Authorization': f"Bearer {CONFIG['snipe-it']['apikey']}",
 # Report if we're verifying SSL or not.
 logging.info(f"SSL Verification is set to: {USER_ARGS.do_not_verify_ssl}")
 
-
 # DEV use only, do not leave API keys in logs.
 # logging.debug(f"Request headers for JAMF will be: {JAMF_HEADERS}")
 # logging.debug(f"Request headers for Snipe will be: {SNIPE_HEADERS}")
 
+# Enable caching
+if CONFIG['cache'].get('expire_after', None):
+    cache_time = CONFIG['cache'].getint('expire_after')
+    cache_location = CONFIG['cache'].get('location', '/tmp/jamf2snipe.cache')
+    logging.info(f"Enabling caching for API calls for {cache_time} seconds.")
+    install_cache(cache_location, backend='sqlite', expire_after=cache_time)
 
-# Use Basic Auth to request a Jamf Token. 
+
+# Use Basic Auth to request a Jamf Token.
 def request_jamf_token():
     # Tokens expire after 30 minutes (new API)
     global CONFIG, JAMF_HEADERS, JAMF_EXPIRES
@@ -285,528 +289,23 @@ def request_jamf_token():
 
 # Function to make the API call for all JAMF devices
 # Returns a list of all computers in JAMF with inventory details
-#   [
-#     {
-#       "id": "1",
-#       "udid": "123",
-#       "general": {
-#         "name": "Boalime",
-#         "lastIpAddress": "247.185.82.186",
-#         "lastReportedIp": "247.185.82.186",
-#         "jamfBinaryVersion": "9.27",
-#         "platform": "Mac",
-#         "barcode1": "5 12345 678900",
-#         "barcode2": "5 12345 678900",
-#         "assetTag": "304822",
-#         "remoteManagement": {
-#           "managed": true,
-#           "managementUsername": "rootname"
-#         },
-#         "supervised": true,
-#         "mdmCapable": {
-#           "capable": true,
-#           "capableUsers": [
-#             "admin",
-#             "rootadmin"
-#           ]
-#         },
-#         "reportDate": "2018-10-31T18:04:13Z",
-#         "lastContactTime": "2018-10-31T18:04:13Z",
-#         "lastCloudBackupDate": "2018-10-31T18:04:13Z",
-#         "lastEnrolledDate": "2018-10-31T18:04:13Z",
-#         "mdmProfileExpiration": "2018-10-31T18:04:13Z",
-#         "initialEntryDate": "2018-10-31",
-#         "distributionPoint": "distribution point name",
-#         "enrollmentMethod": {
-#           "id": "1",
-#           "objectName": "user@domain.com",
-#           "objectType": "User-initiated - no invitation"
-#         },
-#         "site": {
-#           "id": "1",
-#           "name": "Eau Claire"
-#         },
-#         "itunesStoreAccountActive": true,
-#         "enrolledViaAutomatedDeviceEnrollment": true,
-#         "userApprovedMdm": true,
-#         "declarativeDeviceManagementEnabled": true,
-#         "extensionAttributes": [
-#           {
-#             "definitionId": "23",
-#             "name": "Some Attribute",
-#             "description": "Some Attribute defines how much Foo impacts Bar.",
-#             "enabled": true,
-#             "multiValue": true,
-#             "values": [
-#               "foo",
-#               "bar"
-#             ],
-#             "dataType": "STRING",
-#             "options": [
-#               "foo",
-#               "bar"
-#             ],
-#             "inputType": "TEXT"
-#           }
-#         ],
-#         "managementId": "73226fb6-61df-4c10-9552-eb9bc353d507"
-#       },
-#       "diskEncryption": {
-#         "bootPartitionEncryptionDetails": {
-#           "partitionName": "main",
-#           "partitionFileVault2State": "VALID",
-#           "partitionFileVault2Percent": 100
-#         },
-#         "individualRecoveryKeyValidityStatus": "VALID",
-#         "institutionalRecoveryKeyPresent": true,
-#         "diskEncryptionConfigurationName": "Test configuration",
-#         "fileVault2EnabledUserNames": [
-#           "admin"
-#         ],
-#         "fileVault2EligibilityMessage": "Not a boot partition"
-#       },
-#       "purchasing": {
-#         "leased": true,
-#         "purchased": true,
-#         "poNumber": "53-1",
-#         "poDate": "2019-01-01",
-#         "vendor": "Example Vendor",
-#         "warrantyDate": "2019-01-01",
-#         "appleCareId": "abcd",
-#         "leaseDate": "2019-01-01",
-#         "purchasePrice": "$500",
-#         "lifeExpectancy": 5,
-#         "purchasingAccount": "admin",
-#         "purchasingContact": "true",
-#         "extensionAttributes": [
-#           {
-#             "definitionId": "23",
-#             "name": "Some Attribute",
-#             "description": "Some Attribute defines how much Foo impacts Bar.",
-#             "enabled": true,
-#             "multiValue": true,
-#             "values": [
-#               "foo",
-#               "bar"
-#             ],
-#             "dataType": "STRING",
-#             "options": [
-#               "foo",
-#               "bar"
-#             ],
-#             "inputType": "TEXT"
-#           }
-#         ]
-#       },
-#       "applications": [
-#         {
-#           "name": "Microsoft Word",
-#           "path": "/usr/local/app",
-#           "version": "1.0.0",
-#           "macAppStore": true,
-#           "sizeMegabytes": 25,
-#           "bundleId": "1",
-#           "updateAvailable": false,
-#           "externalVersionId": "1"
-#         }
-#       ],
-#       "storage": {
-#         "bootDriveAvailableSpaceMegabytes": 3072,
-#         "disks": [
-#           {
-#             "id": "170",
-#             "device": "disk0",
-#             "model": "APPLE HDD TOSHIBA MK5065GSXF",
-#             "revision": "5",
-#             "serialNumber": "a8598f013366",
-#             "sizeMegabytes": 262144,
-#             "smartStatus": "OK",
-#             "type": "false",
-#             "partitions": [
-#               {
-#                 "name": "Foo",
-#                 "sizeMegabytes": 262144,
-#                 "availableMegabytes": 131072,
-#                 "partitionType": "BOOT",
-#                 "percentUsed": 25,
-#                 "fileVault2State": "VALID",
-#                 "fileVault2ProgressPercent": 45,
-#                 "lvmManaged": true
-#               }
-#             ]
-#           }
-#         ]
-#       },
-#       "userAndLocation": {
-#         "username": "Madison Anderson",
-#         "realname": "13-inch MacBook",
-#         "email": "email@com.pl",
-#         "position": "IT Team Lead",
-#         "phone": "123-456-789",
-#         "departmentId": "1",
-#         "buildingId": "1",
-#         "room": "5",
-#         "extensionAttributes": [
-#           {
-#             "definitionId": "23",
-#             "name": "Some Attribute",
-#             "description": "Some Attribute defines how much Foo impacts Bar.",
-#             "enabled": true,
-#             "multiValue": true,
-#             "values": [
-#               "foo",
-#               "bar"
-#             ],
-#             "dataType": "STRING",
-#             "options": [
-#               "foo",
-#               "bar"
-#             ],
-#             "inputType": "TEXT"
-#           }
-#         ]
-#       },
-#       "configurationProfiles": [
-#         {
-#           "id": "1",
-#           "username": "username",
-#           "lastInstalled": "2018-10-31T18:04:13Z",
-#           "removable": true,
-#           "displayName": "Displayed profile",
-#           "profileIdentifier": "0ae590fe-9b30-11ea-bb37-0242ac130002"
-#         }
-#       ],
-#       "printers": [
-#         {
-#           "name": "My Printer",
-#           "type": "XYZ 1122",
-#           "uri": "ipp://10.0.0.5",
-#           "location": "7th floor"
-#         }
-#       ],
-#       "services": [
-#         {
-#           "name": "SomeService"
-#         }
-#       ],
-#       "hardware": {
-#         "make": "Apple",
-#         "model": "13-inch MacBook Pro (Mid 2012)",
-#         "modelIdentifier": "MacBookPro9,2",
-#         "serialNumber": "C02ZC2QYLVDL",
-#         "processorSpeedMhz": 2100,
-#         "processorCount": 2,
-#         "coreCount": 2,
-#         "processorType": "Intel Core i5",
-#         "processorArchitecture": "i386",
-#         "busSpeedMhz": 2133,
-#         "cacheSizeKilobytes": 3072,
-#         "networkAdapterType": "Foo",
-#         "macAddress": "6A:2C:4B:B7:65:B5",
-#         "altNetworkAdapterType": "Bar",
-#         "altMacAddress": "82:45:58:44:dc:01",
-#         "totalRamMegabytes": 4096,
-#         "openRamSlots": 0,
-#         "batteryCapacityPercent": 85,
-#         "smcVersion": "2.2f38",
-#         "nicSpeed": "N/A",
-#         "opticalDrive": "MATSHITA DVD-R UJ-8A8",
-#         "bootRom": "MBP91.00D3.B08",
-#         "bleCapable": false,
-#         "supportsIosAppInstalls": false,
-#         "appleSilicon": false,
-#         "extensionAttributes": [
-#           {
-#             "definitionId": "23",
-#             "name": "Some Attribute",
-#             "description": "Some Attribute defines how much Foo impacts Bar.",
-#             "enabled": true,
-#             "multiValue": true,
-#             "values": [
-#               "foo",
-#               "bar"
-#             ],
-#             "dataType": "STRING",
-#             "options": [
-#               "foo",
-#               "bar"
-#             ],
-#             "inputType": "TEXT"
-#           }
-#         ]
-#       },
-#       "localUserAccounts": [
-#         {
-#           "uid": "501",
-#           "userGuid": "844F1177-0CF5-40C6-901F-38EDD9969C1C",
-#           "username": "jamf",
-#           "fullName": "John Jamf",
-#           "admin": true,
-#           "homeDirectory": "/Users/jamf",
-#           "homeDirectorySizeMb": 131072,
-#           "fileVault2Enabled": true,
-#           "userAccountType": "LOCAL",
-#           "passwordMinLength": 4,
-#           "passwordMaxAge": 5,
-#           "passwordMinComplexCharacters": 5,
-#           "passwordHistoryDepth": 5,
-#           "passwordRequireAlphanumeric": true,
-#           "computerAzureActiveDirectoryId": "1",
-#           "userAzureActiveDirectoryId": "1",
-#           "azureActiveDirectoryId": "ACTIVATED"
-#         }
-#       ],
-#       "certificates": [
-#         {
-#           "commonName": "jamf.com",
-#           "identity": true,
-#           "expirationDate": "2030-10-31T18:04:13Z",
-#           "username": "test",
-#           "lifecycleStatus": "ACTIVE",
-#           "certificateStatus": "ISSUED",
-#           "subjectName": "CN=jamf.com",
-#           "serialNumber": "40f3d9fb",
-#           "sha1Fingerprint": "ed361458724d06082b2314acdb82e1f586f085f5",
-#           "issuedDate": "2022-05-23T14:54:10Z"
-#         }
-#       ],
-#       "attachments": [
-#         {
-#           "id": "1",
-#           "name": "Attachment.pdf",
-#           "fileType": "application/pdf",
-#           "sizeBytes": 1024
-#         }
-#       ],
-#       "plugins": [
-#         {
-#           "name": "plugin name",
-#           "version": "1.02",
-#           "path": "/Applications/"
-#         }
-#       ],
-#       "packageReceipts": {
-#         "installedByJamfPro": [
-#           "com.jamf.protect.JamfProtect"
-#         ],
-#         "installedByInstallerSwu": [
-#           "com.apple.pkg.Core"
-#         ],
-#         "cached": [
-#           "com.jamf.protect.JamfProtect"
-#         ]
-#       },
-#       "fonts": [
-#         {
-#           "name": "font name",
-#           "version": "1.02",
-#           "path": "/Applications/"
-#         }
-#       ],
-#       "security": {
-#         "sipStatus": "ENABLED",
-#         "gatekeeperStatus": "APP_STORE_AND_IDENTIFIED_DEVELOPERS",
-#         "xprotectVersion": "1.2.3",
-#         "autoLoginDisabled": false,
-#         "remoteDesktopEnabled": true,
-#         "activationLockEnabled": true,
-#         "recoveryLockEnabled": true,
-#         "firewallEnabled": true,
-#         "secureBootLevel": "FULL_SECURITY",
-#         "externalBootLevel": "ALLOW_BOOTING_FROM_EXTERNAL_MEDIA",
-#         "bootstrapTokenAllowed": true
-#       },
-#       "operatingSystem": {
-#         "name": "Mac OS X",
-#         "version": "10.9.5",
-#         "build": "13A603",
-#         "supplementalBuildVersion": "13A953",
-#         "rapidSecurityResponse": "(a)",
-#         "activeDirectoryStatus": "Not Bound",
-#         "fileVault2Status": "ALL_ENCRYPTED",
-#         "softwareUpdateDeviceId": "J132AP",
-#         "extensionAttributes": [
-#           {
-#             "definitionId": "23",
-#             "name": "Some Attribute",
-#             "description": "Some Attribute defines how much Foo impacts Bar.",
-#             "enabled": true,
-#             "multiValue": true,
-#             "values": [
-#               "foo",
-#               "bar"
-#             ],
-#             "dataType": "STRING",
-#             "options": [
-#               "foo",
-#               "bar"
-#             ],
-#             "inputType": "TEXT"
-#           }
-#         ]
-#       },
-#       "licensedSoftware": [
-#         {
-#           "id": "1",
-#           "name": "Microsoft Word"
-#         }
-#       ],
-#       "ibeacons": [
-#         {
-#           "name": "room A"
-#         }
-#       ],
-#       "softwareUpdates": [
-#         {
-#           "name": "BEdit",
-#           "version": "1.15.2",
-#           "packageName": "com.apple.pkg.AdditionalEssentials"
-#         }
-#       ],
-#       "extensionAttributes": [
-#         {
-#           "definitionId": "23",
-#           "name": "Some Attribute",
-#           "description": "Some Attribute defines how much Foo impacts Bar.",
-#           "enabled": true,
-#           "multiValue": true,
-#           "values": [
-#             "foo",
-#             "bar"
-#           ],
-#           "dataType": "STRING",
-#           "options": [
-#             "foo",
-#             "bar"
-#           ],
-#           "inputType": "TEXT"
-#         }
-#       ],
-#       "contentCaching": {
-#         "computerContentCachingInformationId": "1",
-#         "parents": [
-#           {
-#             "contentCachingParentId": "1",
-#             "address": "SomeAddress",
-#             "alerts": {
-#               "contentCachingParentAlertId": "1",
-#               "addresses": [],
-#               "className": "SomeClass",
-#               "postDate": "2018-10-31T18:04:13Z"
-#             },
-#             "details": {
-#               "contentCachingParentDetailsId": "1",
-#               "acPower": true,
-#               "cacheSizeBytes": 0,
-#               "capabilities": {
-#                 "contentCachingParentCapabilitiesId": "1",
-#                 "imports": true,
-#                 "namespaces": true,
-#                 "personalContent": true,
-#                 "queryParameters": true,
-#                 "sharedContent": true,
-#                 "prioritization": true
-#               },
-#               "portable": true,
-#               "localNetwork": [
-#                 {
-#                   "contentCachingParentLocalNetworkId": "1",
-#                   "speed": 5000,
-#                   "wired": true
-#                 }
-#               ]
-#             },
-#             "guid": "CD1E1291-4AF9-4468-B5D5-0F780C13DB2F",
-#             "healthy": true,
-#             "port": 0,
-#             "version": "1"
-#           }
-#         ],
-#         "alerts": [
-#           {
-#             "cacheBytesLimit": 0,
-#             "className": "SomeClass",
-#             "pathPreventingAccess": "/some/path",
-#             "postDate": "2018-10-31T18:04:13Z",
-#             "reservedVolumeBytes": 0,
-#             "resource": "SomeResource"
-#           }
-#         ],
-#         "activated": false,
-#         "active": false,
-#         "actualCacheBytesUsed": 0,
-#         "cacheDetails": [
-#           {
-#             "computerContentCachingCacheDetailsId": "1",
-#             "categoryName": "SomeCategory",
-#             "diskSpaceBytesUsed": 0
-#           }
-#         ],
-#         "cacheBytesFree": 23353884672,
-#         "cacheBytesLimit": 0,
-#         "cacheStatus": "OK",
-#         "cacheBytesUsed": 0,
-#         "dataMigrationCompleted": false,
-#         "dataMigrationProgressPercentage": 0,
-#         "dataMigrationError": {
-#           "code": 0,
-#           "domain": "SomeDomain",
-#           "userInfo": [
-#             {
-#               "key": "foo",
-#               "value": "bar"
-#             }
-#           ]
-#         },
-#         "maxCachePressureLast1HourPercentage": 0,
-#         "personalCacheBytesFree": 23353884672,
-#         "personalCacheBytesLimit": 0,
-#         "personalCacheBytesUsed": 0,
-#         "port": 0,
-#         "publicAddress": "SomeAddress",
-#         "registrationError": "NOT_ACTIVATED",
-#         "registrationResponseCode": 403,
-#         "registrationStarted": "2018-10-31T18:04:13Z",
-#         "registrationStatus": "CONTENT_CACHING_FAILED",
-#         "restrictedMedia": false,
-#         "serverGuid": "CD1E1291-4AF9-4468-B5D5-0F780C13DB2F",
-#         "startupStatus": "FAILED",
-#         "tetheratorStatus": "CONTENT_CACHING_DISABLED",
-#         "totalBytesAreSince": "2018-10-31T18:04:13Z",
-#         "totalBytesDropped": 0,
-#         "totalBytesImported": 0,
-#         "totalBytesReturnedToChildren": 0,
-#         "totalBytesReturnedToClients": 0,
-#         "totalBytesReturnedToPeers": 0,
-#         "totalBytesStoredFromOrigin": 0,
-#         "totalBytesStoredFromParents": 0,
-#         "totalBytesStoredFromPeers": 0
-#       },
-#       "groupMemberships": [
-#         {
-#           "groupId": "1",
-#           "groupName": "groupOne",
-#           "smartGroup": true
-#         }
-#       ]
-#     }
-#   ]
+# Pass filter_rsql in rsql format - e.g. "general.assetTag==123456"
 @lru_cache(maxsize=64)
-def get_jamf_computers():
+def get_jamf_computers(filter_rsql=None):
     # Sections the user wants to retrieve, we require general and hardware for getting serial/asset numbers
     sections = {"GENERAL", "HARDWARE", "USER_AND_LOCATION"}
-    search_query = ""
     for mapping in CONFIG['computers-api-mapping'].values():
         # Get index in JAMF_SUBSETS_COMPUTERS
         root = mapping.split(" ")[0]
         if root in JAMF_SUBSETS_COMPUTERS:
             sections.add(JAMF_SUBSETS_COMPUTERS[root])
 
-    # TODO: Add query support in config
+    search_query = "?section=" + "&section=".join(sections)
 
-    if sections:
-        search_query = "?section=" + "&section=".join(sections)
+    if filter_rsql:
+        search_query += f"&filter={filter_rsql}"
 
+    logging.info("Fetching JAMF computers...")
     return get_jamf_paginated_objects(f"/api/v1/computers-inventory{search_query}")
 
 
@@ -835,25 +334,25 @@ def get_jamf_paginated_objects(api, page=0):
 
 # Function to make the API call for all JAMF mobile devices
 @lru_cache(maxsize=64)
-def get_jamf_mobiles():
+def get_jamf_mobiles(filter_rsql=None):
     global USER_ARGS
     # Sections the user wants to retrieve, we require general and hardware for getting serial/asset numbers
     sections = {"GENERAL", "HARDWARE"}
     if USER_ARGS.users or USER_ARGS.force:
         sections.add("USER_AND_LOCATION")
 
-    search_query = ""
     for mapping in CONFIG['mobile_devices-api-mapping'].values():
         # Get index in JAMF_SUBSETS_MOBILE
         root = mapping.split(" ")[0]
         if root in JAMF_SUBSETS_MOBILE:
             sections.add(JAMF_SUBSETS_MOBILE[root])
 
-    # TODO: Add query support in config
+    search_query = "?section=" + "&section=".join(sections)
 
-    if sections:
-        search_query = "?section=" + "&section=".join(sections)
+    if filter_rsql:
+        search_query += f"&filter={filter_rsql}"
 
+    logging.info("Fetching JAMF computers...")
     return get_jamf_paginated_objects(f"/api/v2/mobile-devices/detail{search_query}")
 
 
@@ -885,13 +384,9 @@ def search_snipe_asset(serial) -> list:
     global CONFIG, USER_ARGS
     response = snipe_api_call(f"hardware/byserial/{serial}")
 
-    if "total" not in response:
-        logging.error("Error when searching for asset, exiting")
-        logging.debug(response)
-        raise SystemExit("Invalid response from Snipe-IT")
-
-    if response['total'] == 0:
+    if "total" not in response or response['total'] == 0:
         logging.info(f"No asset found for {serial}")
+        logging.debug(response)
         return []
 
     return response['rows']
@@ -1130,19 +625,19 @@ def get_config_value(config_key, data):
     value = data
     for key in search_keys:
         try:
+            # Try to convert to int, settings file returns strings,
+            # but if we want to traverse a list we need an int
             key = int(key)
         except ValueError:
             logging.debug(f"{key} is not an integer")
         try:
             value = value[key]
-        except (KeyError, IndexError):
-            logging.info(f"{key} does not exist")
+        except (KeyError, IndexError, TypeError):
+            # JAMF is not consistent with return types
+            logging.info(f"{key} does not exist or is empty")
             logging.debug(f"Key value: {value}")
             value = None
             break
-        except TypeError:
-            logging.error(f"Type error when fetching data for {key}, check your CONFIG")
-            raise SystemExit
 
     logging.debug(f"Got value {value} for {config_key}")
     return value
@@ -1168,13 +663,15 @@ def main():
     logging.debug(f"Model list: {modelnumbers}")
 
     # Get a list of computers from JAMF
+    mobile_filter = CONFIG['jamf'].get("mobile_devices-filter", None)
+    computer_filter = CONFIG['jamf'].get("computer-filter", None)
     if USER_ARGS.computers:
-        complete_list = get_jamf_computers()
+        complete_list = get_jamf_computers(computer_filter)
     elif USER_ARGS.mobiles:
-        complete_list = get_jamf_mobiles()
+        complete_list = get_jamf_mobiles(mobile_filter)
     else:
-        complete_list = get_jamf_computers()
-        complete_list.extend(get_jamf_mobiles())
+        complete_list = get_jamf_computers(computer_filter)
+        complete_list.extend(get_jamf_mobiles(mobile_filter))
 
     total = len(complete_list)
 
@@ -1190,6 +687,7 @@ def main():
 
     for jamf_asset in complete_list:
         # We can differentiate between a computer and a mobile device by the presence of a mobileDeviceId
+        logging.debug(f"Processing JAMF asset: {jamf_asset}")
         custom_fieldset_id = None
         if "mobileDeviceId" in jamf_asset:
             jamf_id = jamf_asset['mobileDeviceId']
@@ -1248,7 +746,7 @@ def main():
 
         asset = {
             'serial': serial_number,
-            'model_identifier': modelnumbers[model_jamf_id]
+            'model_id': modelnumbers[model_jamf_id]
         }
 
         if not USER_ARGS.auto_incrementing:
@@ -1295,9 +793,9 @@ def main():
                     if snipe_asset[0][asset_key] == asset[asset_key]:
                         del asset[asset_key]
 
-            if 'model_identifier' in asset and 'model' in snipe_asset[0]:
-                if snipe_asset[0]['model']['id'] == asset['model_identifier']:
-                    del asset['model_identifier']
+            if 'model_id' in asset and 'model' in snipe_asset[0]:
+                if snipe_asset[0]['model']['id'] == asset['model_id']:
+                    del asset['model_id']
 
             # Clean up custom fields
             for custom_field in snipe_asset[0]['custom_fields'].values():
@@ -1314,6 +812,7 @@ def main():
                 update_snipe_asset(snipe_asset[0]['id'], asset)
 
         # Checking out
+        # Username could be in assigned_to['user
         checkout_snipe_asset(get_config_value(CONFIG['user-mapping']['jamf_api_field'], jamf_asset), snipe_asset[0])
 
         if 'asset_tag' in snipe_asset and str(snipe_asset[0]['asset_tag']) != str(jamf_asset['general']['assetTag']):

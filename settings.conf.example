@@ -3,6 +3,16 @@
 url = https://yourinstance.jamfcloud.com
 username = yourJamfUsername
 password = $ecretJ@mfPassw0rd
+# Optional - JAMF rsql filter - see API documentation
+# Filter JAMF to only include devices that match the following criteria (eg. general.assetTag==jamfid-*)
+# mobile_devices-filter=general.assetTag==jamfid-*
+# computers-filter=general.assetTag==jamfid-*
+
+[cache]
+# This sets a URL cache timeout, useful for debugging or if you need to repeatedly run this script
+# (eg. with filters in a script). Set to 0 to disable caching.
+expire_after = 3600
+cache_location = /tmp/jamf2snipeit.cache
 
 [snipe-it]
 #Required
