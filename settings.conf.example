@@ -8,26 +8,39 @@ password = $ecretJ@mfPassw0rd
 #Required
 url = https://FQDN.your.snipe.instance.com
 apikey = YOUR-API-KEY-HERE
-manufacturer_id = 2
+manufacturer_id = 1
 defaultStatus = 2
 computer_model_category_id = 2
 mobile_model_category_id = 3
-#Not Required, uncomment to use
-#computer_custom_fieldset_id = 3
-#mobile_custom_fieldset_id = 4
-#asset_tag = general serial_number # If not specified, defaults to jamf-{id} or jamf-m-{id}
+# Not Required, uncomment to use
+computer_custom_fieldset_id = 1
+mobile_custom_fieldset_id = 2
+computer_asset_tag_prefix = jamfid-
+mobile_asset_tag_prefix = jamfid-m-
 
 # EDIT THESE FIELDS SO THEY CORRESPOND WITH THE CUSTOM FIELD DB COLUMN NAMES IN YOUR SNIPE-IT INSTANCE
 [computers-api-mapping]
 name = general name
-_snipeit_mac_address_1 = general mac_address
-_snipeit_ram_2 = hardware total_ram_mb
-_snipeit_hdd_3 = hardware storage drive_capacity_mb
-
+_snipeit_mac_address_1 = hardware macAddress
+_snipeit_ram_2 = hardware totalRamMegabytes
+_snipeit_storage_3 = storage disks 0 sizeMegabytes
+_snipeit_mac_address_2_5 = hardware altMacAddress
+_snipeit_operating_system_8 = operatingSystem name
+_snipeit_os_version_9 = operatingSystem version
+_snipeit_os_build_10 = operatingSystem build
+_snipeit_ip_address_13 = general lastIpAddress
+_snipeit_cpu_name_14 = hardware processorType
 
 [mobile_devices-api-mapping]
-_snipeit_imei_4	= network imei
-name = general name
+_snipeit_imei_4 = network imei
+_snipeit_mac_address_1 = hardware wifiMacAddress
+_snipeit_storage_3 = hardware capacityMb
+_snipeit_mac_address_2_5 = hardware bluetoothMacAddress
+_snipeit_operating_system_8 = deviceType
+_snipeit_os_version_9 = general osVersion
+_snipeit_os_build_10 = general osBuild
+_snipeit_ip_address_13 = general ipAddress
+name = general displayName
 
 [user-mapping] # The field from jamf that you want to search Snipe with
-jamf_api_field = location username
+jamf_api_field = userAndLocation username
