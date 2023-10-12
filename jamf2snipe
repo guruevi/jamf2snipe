@@ -13,26 +13,17 @@
 #   MIT
 #
 # CONFIGURATION:
-#   These settings are commonly found in the settings.conf file.
-#
-#   This setting sets the Snipe Asset status when creating a new asset. By default it's set to 4 (Pending).
-#   CONFIG['snipe-it']['defaultStatus'] = 4
-#
-#   You can associate snipe hardware keys in the [api-mapping] section, to to a JAMF keys so it associates
-#   the jamf values into snipe. The default example associates information that exists by default in both
-#   Snipe and JAMF.  The Key value is the exact name of the snipe key name.
-#   Value1 is the "Subset" (JAMF's wording not mine) name, and the Value2 is the JAMF key name.
-#   Note that MAC Address are a custom value in SNIPE by default and you can use it as an example.
-#
-#   [api-mapping]
-#       name = general name
-#       _snipeit_mac_address_1 = general mac_address
-#       _snipeit_custom_name_1234567890 = subset jamf_key
-#
-#   A list of valid subsets are:
+#   See README.md
 
 from requests import Response
 from requests_cache import install_cache
+from functools import lru_cache
+import requests
+from time import sleep
+import configparser
+import argparse
+import logging
+from datetime import datetime, timedelta
 
 install_cache('/tmp/jamf2snipe.cache', backend='sqlite', expire_after=60 * 60 * 12)
 
@@ -81,14 +72,7 @@ JAMF_SUBSETS_MOBILE = {
     'extensionAttributes': 'EXTENSION_ATTRIBUTES'
 }
 
-# Import all the things
-from functools import lru_cache
-import requests
-from time import sleep
-import configparser
-import argparse
-import logging
-from datetime import datetime, timedelta
+
 
 # Setup some global variables
 JAMF_EXPIRES = datetime.now()
@@ -153,14 +137,14 @@ logging.info("Searching for a valid settings.conf file.")
 CONFIG = configparser.ConfigParser()
 logging.debug("Checking for a settings.conf in the local directory first ...")
 CONFIG.read("settings.conf")
-if 'snipe-it' not in set(CONFIG):
+if 'snipe-it' not in CONFIG:
     logging.debug("No valid CONFIG found in folder. Checking for a settings.conf in /etc/jamf2snipe ...")
     CONFIG.read('/etc/jamf2snipe/settings.conf')
-if 'snipe-it' not in set(CONFIG):
+if 'snipe-it' not in CONFIG:
     logging.debug(
         "No valid CONFIG found in /etc/jamf2snipe. Checking for a settings.conf in /opt/jamf2snipe directory ...")
     CONFIG.read("/opt/jamf2snipe/settings.conf")
-if 'snipe-it' not in set(CONFIG):
+if 'snipe-it' not in CONFIG:
     logging.error(
         "No valid settings.conf was found. We'll need to quit while you figure out where the settings are at. You can "
         "check the README for valid locations.")
@@ -202,7 +186,8 @@ try:
     # logging.debug(f"The API key you provided for Snipe-IT is: {CONFIG['snipe-it']['apikey']}")
 
     logging.info("Checking the default status for Snipe-IT assets...")
-    logging.debug(f"The default status we'll be setting updated assets to is: {CONFIG['snipe-it']['defaultStatus']}")
+    logging.debug(f"The default status we'll be setting updated assets to is: "
+                  f"{CONFIG['snipe-it']['default_status_id']}")
 
     logging.info("Checking the Snipe ID for Apple...")
     # TODO: Use plain text and query this from API
@@ -227,7 +212,8 @@ if not CONFIG['snipe-it']['manufacturer_id'].isnumeric():
 
 if not CONFIG['snipe-it']['defaultStatus'].isnumeric():
     raise SystemExit(
-        "Error: The defaultStatus in settings.conf is not a number. Please check your settings.conf file and try again.")
+        "Error: The defaultStatus in settings.conf is not a number. "
+        "Please check your settings.conf file and try again.")
 
 # Check the CONFIG file for correct headers
 
@@ -249,8 +235,8 @@ logging.info(f"SSL Verification is set to: {USER_ARGS.do_not_verify_ssl}")
 
 
 # DEV use only, do not leave API keys in logs.
-# logging.debug(f'Request headers for JAMF will be: {JAMF_HEADERS}')
-# logging.debug(f'Request headers for Snipe will be: {SNIPE_HEADERS}')
+# logging.debug(f"Request headers for JAMF will be: {JAMF_HEADERS}")
+# logging.debug(f"Request headers for Snipe will be: {SNIPE_HEADERS}")
 
 
 # Use Basic Auth to request a Jamf Token. 
@@ -850,23 +836,6 @@ def get_jamf_paginated_objects(api, page=0):
 
 
 # Function to make the API call for all JAMF mobile devices
-# Returns
-# [
-#     {
-#       "id": "1",
-#       "name": "iPad",
-#       "serialNumber": "DMQVGC0DHLA0",
-#       "wifiMacAddress": "C4:84:66:92:78:00",
-#       "udid": "0dad565fb40b010a9e490440188063a378721069",
-#       "phoneNumber": "651-555-5555 Ext111",
-#       "model": "iPad 5th Generation (Wi-Fi)",
-#       "modelIdentifier": "iPad6,11",
-#       "username": "admin",
-#       "type": "ios",
-#       "managementId": "73226fb6-61df-4c10-9552-eb9bc353d507",
-#       "softwareUpdateDeviceId": "J132AP"
-#     }
-# ]
 @lru_cache(maxsize=64)
 def get_jamf_mobiles():
     global USER_ARGS
@@ -1223,6 +1192,7 @@ def main():
 
     for jamf_asset in complete_list:
         # We can differentiate between a computer and a mobile device by the presence of a mobileDeviceId
+        custom_fieldset_id = None
         if "mobileDeviceId" in jamf_asset:
             jamf_id = jamf_asset['mobileDeviceId']
             category_id = CONFIG['snipe-it']['mobile_model_category_id']
@@ -1305,11 +1275,11 @@ def main():
         if not snipe_asset:
             # Create a new asset
             logging.info(f"Creating a new asset in snipe for JAMF ID: {jamf_id}")
+            asset['status_id'] = CONFIG['snipe-it']['default_status_id']
             asset = create_snipe_asset(asset)
             # If new asset, then snipe update time = jamf update time
             snipe_update_time = jamf_update_time
-
-        if snipe_asset:
+        else:
             logging.info(f"Asset exists in snipe for JAMF ID: {jamf_id}")
             logging.debug(snipe_asset)
             # Snipe formats 2023-10-11 11:43:34
@@ -1348,7 +1318,7 @@ def main():
         # Checking out
         checkout_snipe_asset(get_config_value(CONFIG['user-mapping']['jamf_api_field'], jamf_asset), snipe_asset[0])
 
-        if 'asset_tag' in snipe_asset and str(snipe_asset['asset_tag']) != str(jamf_asset['general']['assetTag']):
+        if 'asset_tag' in snipe_asset and str(snipe_asset[0]['asset_tag']) != str(jamf_asset['general']['assetTag']):
             logging.info(f"Updating JAMF asset tag from {jamf_asset['general']['assetTag']} to {asset['asset_tag']}")
             if "mobileDeviceId" in jamf_asset:
                 update_jamf_mobiledevice_asset_tag(jamf_asset['mobileDeviceId'], asset['asset_tag'])
