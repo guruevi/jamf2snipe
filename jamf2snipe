@@ -72,8 +72,6 @@ JAMF_SUBSETS_MOBILE = {
     'extensionAttributes': 'EXTENSION_ATTRIBUTES'
 }
 
-
-
 # Setup some global variables
 JAMF_EXPIRES = datetime.now()
 SNIPE_BACKOFF = 0
@@ -210,9 +208,9 @@ if not CONFIG['snipe-it']['manufacturer_id'].isnumeric():
         "Error: The manufacturer_id in settings.conf is not a number. Please check your settings.conf file and try "
         "again.")
 
-if not CONFIG['snipe-it']['defaultStatus'].isnumeric():
+if not CONFIG['snipe-it']['default_status_id'].isnumeric():
     raise SystemExit(
-        "Error: The defaultStatus in settings.conf is not a number. "
+        "Error: The default_status_id in settings.conf is not a number. "
         "Please check your settings.conf file and try again.")
 
 # Check the CONFIG file for correct headers
