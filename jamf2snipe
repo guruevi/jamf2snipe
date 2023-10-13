@@ -338,7 +338,7 @@ def get_jamf_mobiles(filter_rsql=None):
     global USER_ARGS
     # Sections the user wants to retrieve, we require general and hardware for getting serial/asset numbers
     sections = {"GENERAL", "HARDWARE"}
-    if USER_ARGS.users or USER_ARGS.user_force:
+    if USER_ARGS.users or USER_ARGS.users_force:
         sections.add("USER_AND_LOCATION")
 
     for mapping in CONFIG['mobile_devices-api-mapping'].values():
