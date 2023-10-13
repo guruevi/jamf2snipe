@@ -24,6 +24,7 @@ import configparser
 import argparse
 import logging
 from datetime import datetime, timedelta
+from jinja2 import Template
 
 version = "1.0.5"
 
@@ -292,13 +293,19 @@ def request_jamf_token():
 # Pass filter_rsql in rsql format - e.g. "general.assetTag==123456"
 @lru_cache(maxsize=64)
 def get_jamf_computers(filter_rsql=None):
+    global CONFIG
     # Sections the user wants to retrieve, we require general and hardware for getting serial/asset numbers
-    sections = {"GENERAL", "HARDWARE", "USER_AND_LOCATION"}
+    sections = {"GENERAL", "HARDWARE"}
     for mapping in CONFIG['computers-api-mapping'].values():
         # Get index in JAMF_SUBSETS_COMPUTERS
         root = mapping.split(" ")[0]
         if root in JAMF_SUBSETS_COMPUTERS:
             sections.add(JAMF_SUBSETS_COMPUTERS[root])
+
+    # Get the user mapping
+    if USER_ARGS.users or USER_ARGS.users_force:
+        key = CONFIG['user-mapping']['computer_api_field'].split(" ")[0]
+        sections.add(JAMF_SUBSETS_COMPUTERS[key])
 
     search_query = "?section=" + "&section=".join(sections)
 
@@ -338,14 +345,17 @@ def get_jamf_mobiles(filter_rsql=None):
     global USER_ARGS
     # Sections the user wants to retrieve, we require general and hardware for getting serial/asset numbers
     sections = {"GENERAL", "HARDWARE"}
-    if USER_ARGS.users or USER_ARGS.users_force:
-        sections.add("USER_AND_LOCATION")
 
     for mapping in CONFIG['mobile_devices-api-mapping'].values():
         # Get index in JAMF_SUBSETS_MOBILE
         root = mapping.split(" ")[0]
         if root in JAMF_SUBSETS_MOBILE:
             sections.add(JAMF_SUBSETS_MOBILE[root])
+
+    # Get the user mapping
+    if USER_ARGS.users or USER_ARGS.users_force:
+        key = CONFIG['user-mapping']['mobile_api_field'].split(" ")[0]
+        sections.add(JAMF_SUBSETS_COMPUTERS[key])
 
     search_query = "?section=" + "&section=".join(sections)
 
@@ -616,8 +626,15 @@ def checkout_snipe_asset(username, asset):
 
 
 # Function to recursively get keys from a dictionary
-def get_config_value(config_key, data):
-    search_keys = config_key.split(" ")
+def get_config_value(config_key, data, invalid_values=None):
+    logging.debug(f"Getting config value for {config_key}")
+    logging.debug(f"Data: {data}")
+    split_key = config_key.split("|", 1)
+    search_keys = split_key[0].strip().split(" ")
+    j2_str = None
+    if len(split_key) > 1:
+        j2_str = split_key[1].strip()
+        logging.debug(f"Jinja2 template: {j2_str}")
 
     value = data
     for key in search_keys:
@@ -635,6 +652,13 @@ def get_config_value(config_key, data):
             logging.debug(f"Key value: {value}")
             value = None
             break
+
+    if invalid_values and value in invalid_values:
+        value = None
+
+    if j2_str:
+        template = Template(j2_str)
+        value = template.render(var=value, data=data)
 
     logging.debug(f"Got value {value} for {config_key}")
     return value
@@ -690,6 +714,9 @@ def main():
             jamf_id = jamf_asset['mobileDeviceId']
             category_id = CONFIG['snipe-it']['mobile_model_category_id']
             api_mapping = CONFIG['mobile_devices-api-mapping']
+            jamf_username = get_config_value(CONFIG['user-mapping']['mobile_api_field'],
+                                             jamf_asset,
+                                             CONFIG['user-mapping'].get('invalid_users', "").split(" "))
             if 'computer_custom_fieldset_id' in CONFIG['snipe-it']:
                 custom_fieldset_id = int(CONFIG['snipe-it']['computer_custom_fieldset_id'])
             asset_tag_prefix = CONFIG['snipe-it'].get('mobile_asset_tag_prefix', 'jamfid-m-')
@@ -707,6 +734,9 @@ def main():
             jamf_id = jamf_asset['id']
             category_id = CONFIG['snipe-it']['computer_model_category_id']
             api_mapping = CONFIG['computers-api-mapping']
+            jamf_username = get_config_value(CONFIG['user-mapping']['mobile_api_field'],
+                                             jamf_asset,
+                                             CONFIG['user-mapping'].get('invalid_users', "").split(" "))
             if 'computer_custom_fieldset_id' in CONFIG['snipe-it']:
                 custom_fieldset_id = int(CONFIG['snipe-it']['computer_custom_fieldset_id'])
             asset_tag_prefix = CONFIG['snipe-it'].get('computer_asset_tag_prefix', 'jamfid-')
@@ -722,7 +752,7 @@ def main():
 
         model_jamf_id = jamf_asset['hardware']['modelIdentifier']
         model_jamf_name = jamf_asset['hardware']['model']
-        serial_number = jamf_asset['hardware']['serialNumber']
+        serial_number = get_config_value(api_mapping['serial_number'], jamf_asset)
 
         if not clean_tag(serial_number):
             logging.warning(f"Asset {jamf_asset['id']} has no (valid) serial number, skipping")
@@ -809,8 +839,8 @@ def main():
                 asset = update_snipe_asset(snipe_asset[0]['id'], asset)
 
         # Checking out
-        # Username could be in assigned_to['user
-        checkout_snipe_asset(get_config_value(CONFIG['user-mapping']['jamf_api_field'], jamf_asset), snipe_asset[0])
+        # Username could be in assigned_to
+        checkout_snipe_asset(jamf_username, snipe_asset[0])
 
         if 'asset_tag' in snipe_asset and str(snipe_asset[0]['asset_tag']) != str(jamf_asset['general']['assetTag']):
             logging.info(f"Updating JAMF asset tag from {jamf_asset['general']['assetTag']} to {asset['asset_tag']}")

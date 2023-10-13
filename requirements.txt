@@ -1,3 +1,4 @@
 configparser
 requests
 requests_cache
+jinja2

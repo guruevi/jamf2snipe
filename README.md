@@ -147,7 +147,7 @@ If you have data such as purchase date in JAMF, you can map it as such:
 
 ```
 purchase_date = purchasing purchased 
-warrantY_date = purchasing warrantyDate 
+warranty_date = purchasing warrantyDate 
 ```
 
 Some example API mappings for mobile devices can be
@@ -163,6 +163,18 @@ _snipeit_os_version_9 = general osVersion
 _snipeit_os_build_10 = general osBuild
 _snipeit_ip_address_13 = general ipAddress
 name = general displayName
+```
+
+You can now also use Jinja2 templating to create custom fields. For example, if you wanted to create a custom field
+called `snipeit_custom_field_1` that was the serial number with the first 3 characters removed, you could do the
+following:
+
+Note the | symbol and var is the value passed from the hardware serialNumber, you can also access the variable data
+which is the entire dictionary of data from the API call - test here: (http://jinja.quantprogramming.com/)
+
+```
+serial_number = hardware serialNumber | {{ var[3:] }}
+serial_number = hardware serialNumber | {{ var|default(data['alternative_serial'], True) }}
 ```
 
 ## Testing
