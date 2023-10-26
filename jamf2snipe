@@ -832,8 +832,14 @@ def main():
                     logging.debug(f"Updating {custom_field} from "
                                   f"{custom_field['value']} "
                                   f"to {asset[snipe_field]}")
-                    if str(custom_field['value']) == str(asset[snipe_field]):
+                    # JAMF inconsistently returns version numbers for 14.0 as either 14.0.0 or 14.0
+                    str_field_value = str(custom_field['value'])
+                    str_asset_value = str(asset[snipe_field])
+                    if str_field_value == str_asset_value or \
+                            str_field_value == str_asset_value + ".0" or \
+                            str_field_value + ".0" == str_asset_value:
                         del asset[snipe_field]
+                        continue
 
             if asset:
                 asset = update_snipe_asset(snipe_asset[0]['id'], asset)
