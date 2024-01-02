@@ -625,6 +625,57 @@ def checkout_snipe_asset(username, asset):
     return True
 
 
+# Validate MAC addresses, return empty string if invalid. JAMF occasionally returns faulty MAC addresses
+def validate_mac(mac_address: str) -> str:
+    # Invalid MAC
+    if not mac_address or len(mac_address) != 17:
+        return ''
+
+    mac_address = mac_address.upper()
+
+    # Random MAC addresses x2, x6, xA, xE are reserved for local use
+    # This catches Microsoft Loopback, VirtualBox, GlobalProtect and Apple Private addresses
+    if mac_address[1] in ['2', '6', 'A', 'E']:
+        return ''
+
+    # Bad MAC addresses
+    bad_prefix = [
+                  # Invalid
+                  '00:00:00',
+                  # VirtualBox
+                  '0A:00:27',
+                  # HyperV
+                  '00:15:5D',
+                  # VMWare network adapters for Player
+                  '00:50:56:C0',
+                  # Belkin (USB network adapters)
+                  '00:17:3F', '00:1C:DF', '00:22:75', '08:86:3B', '14:91:82', '24:F5:A2', '30:23:03', '58:EF:68',
+                  '60:38:E0', '80:69:1A', '94:10:3E', '94:44:52', 'B4:75:0E', 'C0:56:27', 'C4:41:1E', 'D8:EC:5E',
+                  'E8:9F:80', 'EC:1A:59',
+                  '00:11:50', '00:30:BD',
+                  # CE Link (USB network adapters)
+                  '6C:6E:07', '70:B3:D5:54', 'A0:CE:C8',
+                  # Cable Matters (USB network adapters)
+                  'F4:4D:AD', '5C:85:7E:30', '70:88:6B:80',
+                  # Cisco AnyConnect
+                  '00:05:9A:3C:7A:00', '00:05:9A:3C:78:00',
+                  # Apple USB dongles?
+                  '5C:F7:E6:8B',
+                  # Microsoft USB dongles?
+                  'F0:1D:BC:F2',
+                  # ASIX USB dongles?
+                  'F8:E4:3B:5B',
+                  # BizLink (Kunshan) USB dongles
+                  '9C:EB:E8'
+                  ]
+
+    # :11 is /28
+    if mac_address in bad_prefix or mac_address[:11] in bad_prefix or mac_address[:8] in bad_prefix:
+        return ''
+
+    return mac_address
+
+
 # Function to recursively get keys from a dictionary
 def get_config_value(config_key, data, invalid_values=None):
     logging.debug(f"Getting config value for {config_key}")
@@ -658,16 +709,17 @@ def get_config_value(config_key, data, invalid_values=None):
 
     if j2_str:
         template = Template(j2_str)
+        template.globals.update({'validate_mac': validate_mac, 'clean_tag': clean_tag})
         value = template.render(var=value, data=data)
 
     logging.debug(f"Got value {value} for {config_key}")
     return value
 
 
-def clean_tag(param):
+def clean_tag(param: str) -> str:
     # Remove illegal values
-    if param.lower() in ["unknown", "not available", "0"]:
-        return None
+    if param.lower() in ["unknown", "not available", "0", "n/a", "none", ""]:
+        return ''
 
     return param
 

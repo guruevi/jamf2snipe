@@ -33,7 +33,7 @@ default_status_id = 4
 [computers-api-mapping]
 name = general name
 serial_number = hardware serialNumber
-_snipeit_mac_address_1 = hardware macAddress
+_snipeit_mac_address_1 = hardware macAddress | {{ validate_mac(var) }}
 _snipeit_ram_2 = hardware totalRamMegabytes
 _snipeit_storage_3 = storage disks 0 sizeMegabytes
 _snipeit_mac_address_2_5 = hardware altMacAddress

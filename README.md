@@ -157,7 +157,7 @@ found in [this call](https://developer.jamf.com/jamf-pro/reference/get_v2-mobile
 _snipeit_imei_4 = network imei
 _snipeit_mac_address_1 = hardware wifiMacAddress
 _snipeit_storage_3 = hardware capacityMb
-_snipeit_mac_address_2_5 = hardware bluetoothMacAddress
+_snipeit_mac_address_2_5 = hardware bluetoothMacAddress | {{ validate_mac(var) }}
 _snipeit_operating_system_8 = deviceType
 _snipeit_os_version_9 = general osVersion
 _snipeit_os_build_10 = general osBuild
