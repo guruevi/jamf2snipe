@@ -14,6 +14,8 @@
 #
 # CONFIGURATION:
 #   See README.md
+import html
+import re
 
 from requests import Response
 from requests_cache import install_cache
@@ -23,7 +25,7 @@ from time import sleep
 import configparser
 import argparse
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from jinja2 import Template
 
 version = "1.0.5"
@@ -295,7 +297,7 @@ def request_jamf_token():
 def get_jamf_computers(filter_rsql=None):
     global CONFIG
     # Sections the user wants to retrieve, we require general and hardware for getting serial/asset numbers
-    sections = {"GENERAL", "HARDWARE"}
+    sections = {"GENERAL", "HARDWARE", "PURCHASING"}
     for mapping in CONFIG['computers-api-mapping'].values():
         # Get index in JAMF_SUBSETS_COMPUTERS
         root = mapping.split(" ")[0]
@@ -389,17 +391,91 @@ def update_jamf_computer_asset_tag(jamf_id, asset_tag):
                          method="PATCH")
 
 
+def clean_mac(mac_address: str | None) -> str | None:
+    if not mac_address:
+        return None
+
+    # Remove everything that is not a hex character
+    mac_address = ''.join(c for c in mac_address.upper() if c in '0123456789ABCDEF')
+    # Invalid MAC
+    if not mac_address or len(mac_address) != 12:
+        return None
+
+    # Random MAC addresses x2, x6, xA, xE are reserved for local use
+    # This catches Microsoft Loopback, VirtualBox, GlobalProtect and Apple Private addresses
+    if mac_address[1] in ['2', '6', 'A', 'E']:
+        return None
+
+    # Make it into a format understandable by Snipe-IT
+    mac_address = ':'.join(mac_address[i:i + 2] for i in range(0, 12, 2))
+
+    return mac_address
+
+
 # Function to find snipe assets by serial number.
-def search_snipe_asset(serial) -> list:
-    global CONFIG, USER_ARGS
-    response = snipe_api_call(f"hardware/byserial/{serial}")
+def get_snipe_asset(serial="", name="", mac_addresses=None, asset_tag=None) -> dict:
+    if not mac_addresses:
+        mac_addresses = []
+    response = {'total': 0}
+    serial = clean_tag(serial)
+    name = clean_tag(name)
+    asset_tag = clean_tag(asset_tag)
 
-    if "total" not in response or response['total'] == 0:
-        logging.info(f"No asset found for {serial}")
-        logging.debug(response)
-        return []
+    clean_macaddresses = []
+    for mac_address in mac_addresses:
+        mac_address = clean_mac(mac_address)
+        if not mac_address:
+            continue
+        clean_macaddresses.append(mac_address)
 
-    return response['rows']
+    # If we have a valid serial number always use that to uniquely identify the asset
+    if serial:
+        api_url = f'hardware/byserial/{serial}'
+        response = snipe_api_call(api_url)
+        if 'total' in response and response['total']:
+            return response
+
+    # Asset tags are less precise but always return 1 result
+    if asset_tag:
+        api_url = f'hardware/bytag/{asset_tag}'
+        response = snipe_api_call(api_url)
+        if 'id' in response:
+            return {'rows': [response], 'total': 1}
+
+    # MAC addresses *should* be unique but not always
+    found = {}
+    for mac_address in clean_macaddresses:
+        payload = {
+            'search': mac_address,
+            'limit': 500
+        }
+        response = snipe_api_call("hardware", method="GET", payload=payload)
+        if 'rows' in response:
+            for row in response['rows']:
+                for field_name, field in row['custom_fields'].items():
+                    if field['field_format'] == 'MAC' and field['value'].upper() == mac_address.upper():
+                        found[row['id']] = row
+                        break
+
+    # If we have a name, we can search for that
+    if len(found) == 0 and name and len(name) > 4:
+        payload = {
+            'search': name,
+            'limit': 500
+        }
+        response = snipe_api_call("hardware", method="GET", payload=payload)
+
+        if 'rows' in response:
+            # Search is fuzzy
+            for row in response['rows']:
+                if html.unescape(row['name'].upper()) == name.upper():
+                    found[row['id']] = row
+
+    # Make a list from the found dict
+    response['rows'] = list(found.values())
+    response['total'] = len(found)
+
+    return response
 
 
 # Helper function to call an API
@@ -640,34 +716,34 @@ def validate_mac(mac_address: str) -> str:
 
     # Bad MAC addresses
     bad_prefix = [
-                  # Invalid
-                  '00:00:00',
-                  # VirtualBox
-                  '0A:00:27',
-                  # HyperV
-                  '00:15:5D',
-                  # VMWare network adapters for Player
-                  '00:50:56:C0',
-                  # Belkin (USB network adapters)
-                  '00:17:3F', '00:1C:DF', '00:22:75', '08:86:3B', '14:91:82', '24:F5:A2', '30:23:03', '58:EF:68',
-                  '60:38:E0', '80:69:1A', '94:10:3E', '94:44:52', 'B4:75:0E', 'C0:56:27', 'C4:41:1E', 'D8:EC:5E',
-                  'E8:9F:80', 'EC:1A:59',
-                  '00:11:50', '00:30:BD',
-                  # CE Link (USB network adapters)
-                  '6C:6E:07', '70:B3:D5:54', 'A0:CE:C8',
-                  # Cable Matters (USB network adapters)
-                  'F4:4D:AD', '5C:85:7E:30', '70:88:6B:80',
-                  # Cisco AnyConnect
-                  '00:05:9A:3C:7A:00', '00:05:9A:3C:78:00',
-                  # Apple USB dongles?
-                  '5C:F7:E6:8B',
-                  # Microsoft USB dongles?
-                  'F0:1D:BC:F2',
-                  # ASIX USB dongles?
-                  'F8:E4:3B:5B',
-                  # BizLink (Kunshan) USB dongles
-                  '9C:EB:E8'
-                  ]
+        # Invalid
+        '00:00:00',
+        # VirtualBox
+        '0A:00:27',
+        # HyperV
+        '00:15:5D',
+        # VMWare network adapters for Player
+        '00:50:56:C0',
+        # Belkin (USB network adapters)
+        '00:17:3F', '00:1C:DF', '00:22:75', '08:86:3B', '14:91:82', '24:F5:A2', '30:23:03', '58:EF:68',
+        '60:38:E0', '80:69:1A', '94:10:3E', '94:44:52', 'B4:75:0E', 'C0:56:27', 'C4:41:1E', 'D8:EC:5E',
+        'E8:9F:80', 'EC:1A:59',
+        '00:11:50', '00:30:BD',
+        # CE Link (USB network adapters)
+        '6C:6E:07', '70:B3:D5:54', 'A0:CE:C8',
+        # Cable Matters (USB network adapters)
+        'F4:4D:AD', '5C:85:7E:30', '70:88:6B:80',
+        # Cisco AnyConnect
+        '00:05:9A:3C:7A:00', '00:05:9A:3C:78:00',
+        # Apple USB dongles?
+        '5C:F7:E6:8B',
+        # Microsoft USB dongles?
+        'F0:1D:BC:F2',
+        # ASIX USB dongles?
+        'F8:E4:3B:5B',
+        # BizLink (Kunshan) USB dongles
+        '9C:EB:E8'
+    ]
 
     # :11 is /28
     if mac_address in bad_prefix or mac_address[:11] in bad_prefix or mac_address[:8] in bad_prefix:
@@ -718,10 +794,59 @@ def get_config_value(config_key, data, invalid_values=None):
 
 def clean_tag(param: str) -> str:
     # Remove illegal values
-    if param.lower() in ["unknown", "not available", "0", "n/a", "none", ""]:
+    if not param or param.lower() in ["unknown", "not available", "0", "n/a", "none", ""]:
         return ''
 
     return param
+
+
+YEAR_REGEXP = re.compile(r'\d{4}')
+
+
+def query_apple_warranty(serial, model_name=None):
+    # http://www.macrumors.com/2010/04/16/apple-tweaks-serial-number-format-with-new-macbook-pro/
+
+    year_re = YEAR_REGEXP.search(model_name)
+    if not year_re:
+        print(f"No year found in model name {model_name}, skipping {serial}")
+        if model_name == 'Mac Studio':
+            return date(year=2022, month=3, day=18)
+
+        return None
+    year = int(year_re.group())
+
+    if len(serial) == 11:
+        # Old format
+        year = serial[2].lower()
+        est_year = 2000 + '   3456789012'.index(year)
+        week = int(serial[3:5]) - 1
+        year_time = date(year=int(est_year), month=1, day=1)
+        if week:
+            week_dif = timedelta(weeks=int(week))
+            year_time += week_dif
+
+        return year_time
+    # Apple starts randomizing serial numbers in 2021
+    elif year < 2021 and 11 < len(serial) < 16:
+        # New format
+        alpha_year = 'cdfghjklmnpqrstvwxyz'
+        alpha_est_year = serial[3].lower()
+        est_year = int(2010 + (alpha_year.index(alpha_est_year) / 2))
+        # 1st or 2nd half of the year
+        est_half = alpha_year.index(alpha_est_year) % 2
+        week = serial[4].lower()
+        alpha_week = ' 123456789cdfghjklmnpqrtvwxy'
+        est_week = alpha_week.index(week) + (est_half * 26) - 1
+        # If the year is off by more than 3 years, assume we're miscalculating
+        if abs(year - est_year) > 3:
+            est_year += 10
+        year_time = date(year=est_year, month=1, day=1)
+        if est_week:
+            week_dif = timedelta(weeks=int(est_week))
+            year_time += week_dif
+        return year_time
+
+    return date(year=year, month=1, day=1)
 
 
 def main():
@@ -762,6 +887,7 @@ def main():
         # We can differentiate between a computer and a mobile device by the presence of a mobileDeviceId
         logging.debug(f"Processing JAMF asset: {jamf_asset}")
         custom_fieldset_id = None
+
         if "mobileDeviceId" in jamf_asset:
             jamf_id = jamf_asset['mobileDeviceId']
             category_id = CONFIG['snipe-it']['mobile_model_category_id']
@@ -823,22 +949,52 @@ def main():
 
             modelnumbers[model_jamf_id] = create_snipe_model(model)
 
-        asset = {
-            'serial': serial_number,
-            'model_id': modelnumbers[model_jamf_id]
-        }
+        asset = {'serial': serial_number, 'model_id': modelnumbers[model_jamf_id],
+                 'asset_tag': jamf_asset['general']['assetTag'], 'status_id': CONFIG['snipe-it']['default_status_id']}
+
+        if jamf_asset['purchasing']:
+            purchase_cost = jamf_asset['purchasing'].get('purchasePrice', 0)
+            if purchase_cost:
+                asset['purchase_cost'] = purchase_cost
+            lease_date = jamf_asset['purchasing'].get('leaseDate', None)
+            purchase_date = jamf_asset['purchasing'].get('poDate', lease_date)
+            if purchase_date:
+                asset['purchase_date'] = purchase_date
+                warranty_ends = jamf_asset['purchasing'].get('warrantyDate', None)
+                if warranty_ends:
+                    asset['warranty_months'] = (datetime.strptime(warranty_ends, "%Y-%m-%d") - datetime.strptime(
+                        purchase_date, "%Y-%m-%d")).days // 30
+            else:
+                logging.warning(f"Asset {jamf_asset['id']} has no purchase date, making a guess")
+                purchase_date = query_apple_warranty(serial_number, model_jamf_name)
+                if purchase_date:
+                    asset['purchase_date'] = purchase_date.strftime("%Y-%m-%d")
+                    asset['warranty_months'] = 36
 
         if not USER_ARGS.auto_incrementing:
-            logging.debug("Auto incrementing is disabled")
-            asset['asset_tag'] = jamf_asset['general']['assetTag']
+            logging.debug("Auto incrementing is disabled, generating asset tag from JAMF ID")
 
             if not asset['asset_tag']:
                 asset['asset_tag'] = f"{asset_tag_prefix}{jamf_id}"
 
-        # Get the serial from snipe
-        snipe_asset = search_snipe_asset(serial_number)
+        # Get MAC addresses
+        mac_addresses = []
+        if 'wifiMacAddress' in jamf_asset['hardware']:
+            mac_addresses.append(jamf_asset['hardware']['wifiMacAddress'])
+        if 'bluetoothMacAddress' in jamf_asset['hardware']:
+            mac_addresses.append(jamf_asset['hardware']['bluetoothMacAddress'])
+        if 'macAddress' in jamf_asset['hardware']:
+            mac_addresses.append(jamf_asset['hardware']['macAddress'])
+        if 'altMacAddress' in jamf_asset['hardware']:
+            mac_addresses.append(jamf_asset['hardware']['altMacAddress'])
 
-        if len(snipe_asset) > 1:
+        # Get the asset from snipe
+        snipe_assets = get_snipe_asset(serial=serial_number,
+                                       name=jamf_asset['general']['name'],
+                                       mac_addresses=mac_addresses,
+                                       asset_tag=asset['asset_tag'])
+
+        if snipe_assets['total'] > 1:
             logging.warning(f"Found {len(snipe_asset)} assets with serial {serial_number}, skipping")
             continue
 
@@ -847,37 +1003,32 @@ def main():
             if value:
                 asset[api_key] = value
 
-        if not snipe_asset:
+        if not snipe_assets or snipe_assets['total'] == 0:
             # Create a new asset
             logging.info(f"Creating a new asset in snipe for JAMF ID: {jamf_id}")
-            asset['status_id'] = CONFIG['snipe-it']['default_status_id']
-            snipe_asset = [create_snipe_asset(asset)]
+            snipe_asset = create_snipe_asset(asset)
             # If new asset, then snipe update time = jamf update time
             snipe_update_time = jamf_update_time
         else:
             logging.info(f"Asset exists in snipe for JAMF ID: {jamf_id}")
+            snipe_asset = snipe_assets['rows'][0]
             logging.debug(snipe_asset)
             # Snipe formats 2023-10-11 11:43:34
-            snipe_update_time = datetime.strptime(snipe_asset[0]['updated_at']['datetime'], "%Y-%m-%d %H:%M:%S")
+            snipe_update_time = datetime.strptime(snipe_asset['updated_at']['datetime'], "%Y-%m-%d %H:%M:%S")
 
         # Check if we need updating
-        if snipe_asset and (USER_ARGS.force or snipe_update_time < jamf_update_time):
+        if USER_ARGS.force or snipe_update_time < jamf_update_time:
             # Update the asset
             logging.info(f"Updating asset in snipe for JAMF ID: {jamf_id}")
 
-            # Clean up primary keys
-            for asset_key in snipe_asset[0].keys():
-                if asset_key in asset:
-                    logging.debug(f"Updating {asset_key} from {snipe_asset[0][asset_key]} to {asset[asset_key]}")
-                    if snipe_asset[0][asset_key] == asset[asset_key]:
-                        del asset[asset_key]
+            if asset['asset_tag'].startswith(asset_tag_prefix):
+                del asset['asset_tag']
 
-            if 'model_id' in asset and 'model' in snipe_asset[0]:
-                if snipe_asset[0]['model']['id'] == asset['model_id']:
-                    del asset['model_id']
+            if snipe_asset['status_label']['id'] > 1:
+                del asset['status_id']
 
             # Clean up custom fields
-            for custom_field in snipe_asset[0]['custom_fields'].values():
+            for custom_field in snipe_asset['custom_fields'].values():
                 logging.debug(custom_field)
                 snipe_field = custom_field['field']
                 if snipe_field in asset.keys():
@@ -894,13 +1045,13 @@ def main():
                         continue
 
             if asset:
-                asset = update_snipe_asset(snipe_asset[0]['id'], asset)
+                asset = update_snipe_asset(snipe_asset['id'], asset)
 
         # Checking out
         # Username could be in assigned_to
-        checkout_snipe_asset(jamf_username, snipe_asset[0])
+        checkout_snipe_asset(jamf_username, snipe_asset)
 
-        if 'asset_tag' in snipe_asset and str(snipe_asset[0]['asset_tag']) != str(jamf_asset['general']['assetTag']):
+        if 'asset_tag' in snipe_asset and str(snipe_asset['asset_tag']) != str(jamf_asset['general']['assetTag']):
             logging.info(f"Updating JAMF asset tag from {jamf_asset['general']['assetTag']} to {asset['asset_tag']}")
             if "mobileDeviceId" in jamf_asset:
                 update_jamf_mobiledevice_asset_tag(jamf_asset['mobileDeviceId'], asset['asset_tag'])
