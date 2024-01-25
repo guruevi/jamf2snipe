@@ -936,8 +936,6 @@ def main():
             logging.warning(f"Asset {jamf_id} has no (valid) serial number, skipping")
             continue
 
-        serial_number = serial_number.upper()
-
         if model_jamf_id and model_jamf_id not in modelnumbers:
             logging.warning(f"Asset {jamf_id} has an unknown model {model_jamf_id}")
             model = {
