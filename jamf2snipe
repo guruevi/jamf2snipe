@@ -372,7 +372,7 @@ def get_jamf_mobiles(filter_rsql=None):
 def update_jamf_mobiledevice_asset_tag(jamf_id, asset_tag):
     # /api/v1/computers-inventory-detail/5
     if USER_ARGS.do_not_update_jamf:
-        logging.warning("Not updating JAMF as requested")
+        logging.debug("Not updating JAMF as requested")
         return None
 
     return jamf_api_call(f"/api/v2/mobile-devices/{jamf_id}",
@@ -382,7 +382,7 @@ def update_jamf_mobiledevice_asset_tag(jamf_id, asset_tag):
 
 def update_jamf_computer_asset_tag(jamf_id, asset_tag):
     if USER_ARGS.do_not_update_jamf:
-        logging.warning("Not updating JAMF as requested")
+        logging.debug("Not updating JAMF as requested")
         return None
 
     # /api/v1/computers-inventory-detail/5
@@ -808,7 +808,7 @@ def query_apple_warranty(serial, model_name=None):
 
     year_re = YEAR_REGEXP.search(model_name)
     if not year_re:
-        print(f"No year found in model name {model_name}, skipping {serial}")
+        logging.warning(f"No year found in model name {model_name}, skipping {serial}")
         if model_name == 'Mac Studio':
             return date(year=2022, month=3, day=18)
 
@@ -936,6 +936,8 @@ def main():
             logging.warning(f"Asset {jamf_id} has no (valid) serial number, skipping")
             continue
 
+        serial_number = serial_number.upper()
+
         if model_jamf_id and model_jamf_id not in modelnumbers:
             logging.warning(f"Asset {jamf_id} has an unknown model {model_jamf_id}")
             model = {
@@ -950,7 +952,7 @@ def main():
             modelnumbers[model_jamf_id] = create_snipe_model(model)
 
         asset = {'serial': serial_number, 'model_id': modelnumbers[model_jamf_id],
-                 'asset_tag': jamf_asset['general']['assetTag'], 'status_id': CONFIG['snipe-it']['default_status_id']}
+                 'asset_tag': jamf_asset['general']['assetTag'].upper(), 'status_id': CONFIG['snipe-it']['default_status_id']}
 
         if jamf_asset['purchasing']:
             purchase_cost = jamf_asset['purchasing'].get('purchasePrice', 0)
@@ -965,7 +967,7 @@ def main():
                     asset['warranty_months'] = (datetime.strptime(warranty_ends, "%Y-%m-%d") - datetime.strptime(
                         purchase_date, "%Y-%m-%d")).days // 30
             else:
-                logging.warning(f"Asset {jamf_id} has no purchase date, making a guess")
+                logging.debug(f"Asset {jamf_id} has no purchase date, making a guess")
                 purchase_date = query_apple_warranty(serial_number, model_jamf_name)
                 if purchase_date:
                     asset['purchase_date'] = purchase_date.strftime("%Y-%m-%d")
@@ -990,7 +992,7 @@ def main():
 
         # Get the asset from snipe
         snipe_assets = get_snipe_asset(serial=serial_number,
-                                       name=jamf_asset['general']['name'],
+                                       name=get_config_value(api_mapping['name'], jamf_asset),
                                        mac_addresses=mac_addresses,
                                        asset_tag=asset['asset_tag'])
 
