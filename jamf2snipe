@@ -391,7 +391,7 @@ def update_jamf_computer_asset_tag(jamf_id, asset_tag):
                          method="PATCH")
 
 
-def clean_mac(mac_address: str | None) -> str | None:
+def validate_mac(mac_address: str | None) -> str | None:
     if not mac_address:
         return None
 
@@ -421,13 +421,6 @@ def get_snipe_asset(serial="", name="", mac_addresses=None, asset_tag=None) -> d
     name = clean_tag(name)
     asset_tag = clean_tag(asset_tag)
 
-    clean_macaddresses = []
-    for mac_address in mac_addresses:
-        mac_address = clean_mac(mac_address)
-        if not mac_address:
-            continue
-        clean_macaddresses.append(mac_address)
-
     # If we have a valid serial number always use that to uniquely identify the asset
     if serial:
         api_url = f'hardware/byserial/{serial}'
@@ -444,7 +437,7 @@ def get_snipe_asset(serial="", name="", mac_addresses=None, asset_tag=None) -> d
 
     # MAC addresses *should* be unique but not always
     found = {}
-    for mac_address in clean_macaddresses:
+    for mac_address in mac_addresses:
         payload = {
             'search': mac_address,
             'limit': 500
@@ -700,58 +693,6 @@ def checkout_snipe_asset(username, asset):
 
     return True
 
-
-# Validate MAC addresses, return empty string if invalid. JAMF occasionally returns faulty MAC addresses
-def validate_mac(mac_address: str) -> str:
-    # Invalid MAC
-    if not mac_address or len(mac_address) != 17:
-        return ''
-
-    mac_address = mac_address.upper()
-
-    # Random MAC addresses x2, x6, xA, xE are reserved for local use
-    # This catches Microsoft Loopback, VirtualBox, GlobalProtect and Apple Private addresses
-    if mac_address[1] in ['2', '6', 'A', 'E']:
-        return ''
-
-    # Bad MAC addresses
-    bad_prefix = [
-        # Invalid
-        '00:00:00',
-        # VirtualBox
-        '0A:00:27',
-        # HyperV
-        '00:15:5D',
-        # VMWare network adapters for Player
-        '00:50:56:C0',
-        # Belkin (USB network adapters)
-        '00:17:3F', '00:1C:DF', '00:22:75', '08:86:3B', '14:91:82', '24:F5:A2', '30:23:03', '58:EF:68',
-        '60:38:E0', '80:69:1A', '94:10:3E', '94:44:52', 'B4:75:0E', 'C0:56:27', 'C4:41:1E', 'D8:EC:5E',
-        'E8:9F:80', 'EC:1A:59',
-        '00:11:50', '00:30:BD',
-        # CE Link (USB network adapters)
-        '6C:6E:07', '70:B3:D5:54', 'A0:CE:C8',
-        # Cable Matters (USB network adapters)
-        'F4:4D:AD', '5C:85:7E:30', '70:88:6B:80',
-        # Cisco AnyConnect
-        '00:05:9A:3C:7A:00', '00:05:9A:3C:78:00',
-        # Apple USB dongles?
-        '5C:F7:E6:8B',
-        # Microsoft USB dongles?
-        'F0:1D:BC:F2',
-        # ASIX USB dongles?
-        'F8:E4:3B:5B',
-        # BizLink (Kunshan) USB dongles
-        '9C:EB:E8'
-    ]
-
-    # :11 is /28
-    if mac_address in bad_prefix or mac_address[:11] in bad_prefix or mac_address[:8] in bad_prefix:
-        return ''
-
-    return mac_address
-
-
 # Function to recursively get keys from a dictionary
 def get_config_value(config_key, data, invalid_values=None):
     logging.debug(f"Getting config value for {config_key}")
@@ -983,21 +924,27 @@ def main():
             del asset['asset_tag']
 
         # Get MAC addresses
-        mac_addresses = []
+        raw_macs = []
         if 'wifiMacAddress' in jamf_asset['hardware']:
-            mac_addresses.append(jamf_asset['hardware']['wifiMacAddress'])
+            raw_macs.append(jamf_asset['hardware']['wifiMacAddress'])
         if 'bluetoothMacAddress' in jamf_asset['hardware']:
-            mac_addresses.append(jamf_asset['hardware']['bluetoothMacAddress'])
+            raw_macs.append(jamf_asset['hardware']['bluetoothMacAddress'])
         if 'macAddress' in jamf_asset['hardware']:
-            mac_addresses.append(jamf_asset['hardware']['macAddress'])
+            raw_macs.append(jamf_asset['hardware']['macAddress'])
         if 'altMacAddress' in jamf_asset['hardware']:
-            mac_addresses.append(jamf_asset['hardware']['altMacAddress'])
+            raw_macs.append(jamf_asset['hardware']['altMacAddress'])
+
+        mac_addresses = []
+        for mac_address in raw_macs:
+            if not validate_mac(mac_address):
+                continue
+            mac_addresses.append(mac_address)
 
         # Get the asset from snipe
         snipe_assets = get_snipe_asset(serial=serial_number,
                                        name=get_config_value(api_mapping['name'], jamf_asset),
                                        mac_addresses=mac_addresses,
-                                       asset_tag=asset['asset_tag'])
+                                       asset_tag=asset_tag)
 
         if snipe_assets['total'] > 1:
             logging.warning(f"Found {len(snipe_asset)} assets with serial {serial_number}, skipping")
@@ -1026,7 +973,7 @@ def main():
             # Update the asset
             logging.info(f"Updating asset in snipe for JAMF ID: {jamf_id}")
 
-            if asset['asset_tag'].startswith(asset_tag_prefix):
+            if asset_tag.startswith(asset_tag_prefix):
                 del asset['asset_tag']
 
             if snipe_asset['status_label']['id'] > 1:
@@ -1050,18 +997,18 @@ def main():
                         continue
 
             if asset:
-                asset = update_snipe_asset(snipe_asset['id'], asset)
+                update_snipe_asset(snipe_asset['id'], asset)
 
         # Checking out
         # Username could be in assigned_to
         checkout_snipe_asset(jamf_username, snipe_asset)
 
-        if 'asset_tag' in snipe_asset and str(snipe_asset['asset_tag']) != str(jamf_asset['general']['assetTag']):
-            logging.info(f"Updating JAMF asset tag from {jamf_asset['general']['assetTag']} to {asset['asset_tag']}")
+        if str(snipe_asset['asset_tag']) != str(jamf_asset['general']['assetTag']):
+            logging.info(f"Updating JAMF asset tag from {jamf_asset['general']['assetTag']} to {asset_tag}")
             if "mobileDeviceId" in jamf_asset:
-                update_jamf_mobiledevice_asset_tag(jamf_id, asset['asset_tag'])
+                update_jamf_mobiledevice_asset_tag(jamf_id, asset_tag)
             else:
-                update_jamf_computer_asset_tag(jamf_id, asset['asset_tag'])
+                update_jamf_computer_asset_tag(jamf_id, asset_tag)
 
 
 if __name__ == "__main__":
