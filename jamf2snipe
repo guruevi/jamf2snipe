@@ -416,10 +416,7 @@ def validate_mac(mac_address: str | None) -> str | None:
 def get_snipe_asset(serial="", name="", mac_addresses=None, asset_tag=None) -> dict:
     if not mac_addresses:
         mac_addresses = []
-    response = {'total': 0}
-    serial = clean_tag(serial)
-    name = clean_tag(name)
-    asset_tag = clean_tag(asset_tag)
+    response = {'total': 0, 'rows': []}
 
     # If we have a valid serial number always use that to uniquely identify the asset
     if serial:
@@ -693,10 +690,11 @@ def checkout_snipe_asset(username, asset):
 
     return True
 
+
 # Function to recursively get keys from a dictionary
 def get_config_value(config_key, data, invalid_values=None):
     logging.debug(f"Getting config value for {config_key}")
-    logging.debug(f"Data: {data}")
+    # logging.debug(f"Data: {data}")
     split_key = config_key.split("|", 1)
     search_keys = split_key[0].strip().split(" ")
     j2_str = None
@@ -735,8 +733,8 @@ def get_config_value(config_key, data, invalid_values=None):
 
 def clean_tag(param: str) -> str:
     # Remove illegal values
-    if not param or param.lower() in ["unknown", "not available", "0", "n/a", "none", ""]:
-        return ''
+    if not param or str(param).lower() in ["unknown", "not available", "0", "n/a", "none", ""]:
+        return None
 
     return param
 
@@ -871,10 +869,19 @@ def main():
 
         model_jamf_id = jamf_asset['hardware']['modelIdentifier']
         model_jamf_name = jamf_asset['hardware']['model']
-        serial_number = get_config_value(api_mapping['serial_number'], jamf_asset)
+        serial_number = clean_tag(get_config_value(api_mapping['serial_number'], jamf_asset))
 
-        if not clean_tag(serial_number):
+        if not serial_number:
             logging.warning(f"Asset {jamf_id} has no (valid) serial number, skipping")
+            continue
+
+        asset_tag = clean_tag(get_config_value(api_mapping['asset_tag'], jamf_asset))
+        if not asset_tag:
+            asset_tag = f"{asset_tag_prefix}{jamf_id}"
+
+        name = clean_tag(get_config_value(api_mapping['name'], jamf_asset))
+        if not name:
+            logging.error(f"Asset {jamf_id} has no name associated with it, skipping")
             continue
 
         if model_jamf_id and model_jamf_id not in modelnumbers:
@@ -891,15 +898,13 @@ def main():
 
             modelnumbers[model_jamf_id] = create_snipe_model(model)
 
-        asset_tag = get_config_value(api_mapping['asset_tag'], jamf_asset)
-        if not clean_tag(asset_tag):
-            asset_tag = f"{asset_tag_prefix}{jamf_id}"
-
-        asset = {'serial': serial_number,
-                 'model_id': modelnumbers[model_jamf_id],
-                 'asset_tag': asset_tag,
-                 'status_id': CONFIG['snipe-it']['default_status_id']
-                 }
+        asset = {
+            'name': name,
+            'serial_number': serial_number,
+            'asset_tag': asset_tag,
+            'model_id': modelnumbers[model_jamf_id],
+            'status_id': CONFIG['snipe-it']['default_status_id']
+        }
 
         if jamf_asset['purchasing']:
             purchase_cost = jamf_asset['purchasing'].get('purchasePrice', 0)
@@ -920,10 +925,6 @@ def main():
                     asset['purchase_date'] = purchase_date.strftime("%Y-%m-%d")
                     asset['warranty_months'] = 36
 
-        if USER_ARGS.auto_incrementing:
-            logging.debug("Auto incrementing is enabled")
-            del asset['asset_tag']
-
         # Get MAC addresses
         raw_macs = []
         if 'wifiMacAddress' in jamf_asset['hardware']:
@@ -943,7 +944,7 @@ def main():
 
         # Get the asset from snipe
         snipe_assets = get_snipe_asset(serial=serial_number,
-                                       name=get_config_value(api_mapping['name'], jamf_asset),
+                                       name=name,
                                        mac_addresses=mac_addresses,
                                        asset_tag=asset_tag)
 
@@ -952,7 +953,9 @@ def main():
             continue
 
         for api_key in api_mapping:
-            value = get_config_value(api_mapping[api_key], jamf_asset)
+            if api_key in ['serial_number', 'asset_tag', 'name']:
+                continue
+            value = clean_tag(get_config_value(api_mapping[api_key], jamf_asset))
             if value:
                 asset[api_key] = value
 
