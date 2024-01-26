@@ -883,7 +883,8 @@ def main():
                 "manufacturer_id": CONFIG['snipe-it']['manufacturer_id'],
                 "name": model_jamf_name,
                 "model_number": model_jamf_id,
-                "category_id": category_id
+                "category_id": category_id,
+                "eol": CONFIG['snipe-it'].get('default_eol', 84)
             }
             if custom_fieldset_id:
                 model['fieldset_id'] = int(CONFIG['snipe-it']['computer_custom_fieldset_id'])
