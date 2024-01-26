@@ -892,7 +892,7 @@ def main():
             modelnumbers[model_jamf_id] = create_snipe_model(model)
 
         asset_tag = get_config_value(api_mapping['asset_tag'], jamf_asset)
-        if not asset_tag:
+        if not clean_tag(asset_tag):
             asset_tag = f"{asset_tag_prefix}{jamf_id}"
 
         asset = {'serial': serial_number,
