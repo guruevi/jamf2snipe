@@ -471,11 +471,11 @@ def paginated_snipe_search(search, page=0):
     return response
 
 
-def cache_snipe_search(search, search_type):
+def cache_snipe_search(search: str, search_type: str) -> list:
     search = search.upper()
     if search in CACHE[search_type]:
         CACHE['hits'] = CACHE['hits'] + 1
-        return CACHE[search_type][search]
+        return [CACHE[search_type][search]]
 
     # We search only the first 5 characters, that way we don't need to re-search for similar names
     response = paginated_snipe_search(search.upper()[0:5])
@@ -490,7 +490,7 @@ def cache_snipe_search(search, search_type):
         CACHE["ASSET_TAG"][row['asset_tag'].upper()] = row
 
     if search.upper() in CACHE[search_type]:
-        return CACHE[search_type][search.upper()]
+        return [CACHE[search_type][search.upper()]]
 
     return []
 
