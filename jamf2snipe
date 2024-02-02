@@ -444,7 +444,7 @@ def get_snipe_asset(serial="", name="", mac_addresses=None, asset_tag=None) -> d
         found = cache_snipe_search(name, "NAME")
 
     # Make a list from the found dict
-    return {'rows': found, 'total': len(found)}
+    return {'rows': found, 'total': 1}
 
 
 CACHE = {"MAC": {}, "NAME": {}, "SERIAL": {}, "ASSET_TAG": {}, 'hits': 0}
