@@ -414,58 +414,83 @@ def validate_mac(mac_address: str | None) -> str | None:
 
 # Function to find snipe assets by serial number.
 def get_snipe_asset(serial="", name="", mac_addresses=None, asset_tag=None) -> dict:
-    if not mac_addresses:
-        mac_addresses = []
-    response = {'total': 0, 'rows': []}
-
-    # If we have a valid serial number always use that to uniquely identify the asset
-    if serial:
-        api_url = f'hardware/byserial/{serial}'
-        response = snipe_api_call(api_url)
-        if 'total' in response and response['total']:
-            return response
-
-    # Asset tags are less precise but always return 1 result
+    # Asset tags always return 1 result
     if asset_tag:
+        if asset_tag in CACHE["ASSET_TAG"]:
+            return {'rows': [CACHE["ASSET_TAG"][asset_tag]], 'total': 1}
+
         api_url = f'hardware/bytag/{asset_tag}'
         response = snipe_api_call(api_url)
         if 'id' in response:
+            CACHE["ASSET_TAG"][asset_tag] = response
             return {'rows': [response], 'total': 1}
 
-    # MAC addresses *should* be unique but not always
-    found = {}
-    for mac_address in mac_addresses:
-        payload = {
-            'search': mac_address,
-            'limit': 500
-        }
-        response = snipe_api_call("hardware", method="GET", payload=payload)
-        if 'rows' in response:
-            for row in response['rows']:
-                for field_name, field in row['custom_fields'].items():
-                    if field['field_format'] == 'MAC' and field['value'].upper() == mac_address.upper():
-                        found[row['id']] = row
-                        break
+    found = []
+    # If we have a valid serial number use that to uniquely identify the asset
+    if serial:
+        found = cache_snipe_search(serial, "SERIAL")
+
+    if mac_addresses:
+        # MAC addresses *should* be unique
+        for mac_address in mac_addresses:
+            if found:
+                break
+            found = cache_snipe_search(mac_address, "MAC")
 
     # If we have a name, we can search for that
-    if len(found) == 0 and name and len(name) > 4:
-        payload = {
-            'search': name,
-            'limit': 500
-        }
-        response = snipe_api_call("hardware", method="GET", payload=payload)
-
-        if 'rows' in response:
-            # Search is fuzzy
-            for row in response['rows']:
-                if html.unescape(row['name'].upper()) == name.upper():
-                    found[row['id']] = row
+    if not found:
+        found = cache_snipe_search(name, "NAME")
 
     # Make a list from the found dict
-    response['rows'] = list(found.values())
-    response['total'] = len(found)
+    return {'rows': found, 'total': len(found)}
 
+
+CACHE = {"MAC": {}, "NAME": {}, "SERIAL": {}, "ASSET_TAG": {}, 'hits': 0}
+
+
+def paginated_snipe_search(search, page=0):
+    page_size = 500
+    payload = {
+        'search': search,
+        'limit': page_size,
+        'offset': page * page_size
+    }
+    logging.debug(f"Searching for {payload}")
+
+    response = snipe_api_call("hardware", method="GET", payload=payload)
+
+    if 'total' not in response or 'rows' not in response or not response['rows']:
+        return {'rows': [], 'total': 0}
+
+    if payload['offset'] + payload['limit'] < response['total']:
+        response['rows'].extend(paginated_snipe_search(search, page + 1)['rows'])
+
+    logging.debug(response)
     return response
+
+
+def cache_snipe_search(search, search_type):
+    search = search.upper()
+    if search in CACHE[search_type]:
+        CACHE['hits'] = CACHE['hits'] + 1
+        return CACHE[search_type][search]
+
+    # We search only the first 5 characters, that way we don't need to re-search for similar names
+    response = paginated_snipe_search(search.upper()[0:5])
+
+    for row in response['rows']:
+        for field_name, field in row['custom_fields'].items():
+            if field['field_format'] == 'MAC':
+                CACHE["MAC"][field['value'].upper()] = row
+
+        CACHE["NAME"][html.unescape(row['name']).upper()] = row
+        CACHE["SERIAL"][row['serial'].upper()] = row
+        CACHE["ASSET_TAG"][row['asset_tag'].upper()] = row
+
+    if search.upper() in CACHE[search_type]:
+        return CACHE[search_type][search.upper()]
+
+    return []
 
 
 # Helper function to call an API
@@ -489,6 +514,14 @@ def snipe_api_call(endpoint, payload=None, method="GET"):
     global CONFIG, SNIPE_HEADERS, SNIPE_BACKOFF
 
     api_url = f"{CONFIG['snipe-it']['url']}/api/v1/{endpoint}"
+
+    # Snipe-IT API does not understand JSON with GET requests
+    if method == "GET" and payload:
+        api_url += "?"
+        for key, value in payload.items():
+            api_url += f"{key}={value}&"
+        api_url = api_url[:-1]
+        payload = None
 
     response = api_call(api_url, payload, method, SNIPE_HEADERS)
 
@@ -563,7 +596,7 @@ def get_snipe_models(page=0):
         models[row['model_number']] = row['id']
 
     # If we haven't gotten all the models, get more
-    if response['total'] >= limits['offset']:
+    if limits['offset'] + limits['limit'] < response['total']:
         logging.debug(f"Fetching more models, currently at: {limits['offset']}/{response['total']}")
         models.update(get_snipe_models(page + 1))
 
@@ -610,15 +643,52 @@ def create_snipe_asset(asset):
 
 
 # Function that updates a snipe asset with a JSON payload
-def update_snipe_asset(snipe_id, payload):
-    logging.debug(f'The payload for the snipe update is: {payload}')
-    response = snipe_api_call(f"hardware/{snipe_id}", payload=payload, method="PATCH")
+def update_snipe_asset(old_asset, new_asset):
+    if 'serial_number' in new_asset and old_asset['serial'] == new_asset['serial_number']:
+        del new_asset['serial_number']
 
-    if "payload" not in response or not response['payload']:
-        logging.error(f'Unable to update asset: {snipe_id}. Received {response}')
-        return None
+    if ('status_id' in new_asset and old_asset['status_label'] and
+            old_asset['status_label']['id'] == new_asset['status_id']):
+        del new_asset['status_id']
 
-    return response['payload']
+    if 'model_id' in new_asset and old_asset['model'] and old_asset['model']['id'] == new_asset['model_id']:
+        del new_asset['model_id']
+
+    if 'category_id' in new_asset and old_asset['category'] and old_asset['category']['id'] == new_asset['category_id']:
+        del new_asset['category_id']
+
+    if 'company_id' in new_asset and old_asset['company'] and old_asset['company']['id'] == new_asset['company_id']:
+        del new_asset['company_id']
+
+    # Clean up regular fields
+    for key, value in old_asset.items():
+        if key in new_asset and str(value) == str(new_asset[key]):
+            del new_asset[key]
+
+    # Clean up custom fields
+    for key, value in old_asset['custom_fields'].items():
+        if value['field'] not in new_asset:
+            continue
+        old_value_str = html.unescape(str(value['value'])).strip()
+        new_value_str = str(new_asset[value['field']]).strip()
+
+        if old_value_str == new_value_str:
+            del new_asset[value['field']]
+            continue
+        # Sometimes versions are returned chopping off the last .0
+        if new_value_str + ".0" == old_value_str or new_value_str == old_value_str + ".0":
+            del new_asset[value['field']]
+
+    if new_asset:
+        response = snipe_api_call(f"hardware/{old_asset['id']}", payload=new_asset, method="PATCH")
+
+        if "payload" not in response or not response['payload']:
+            logging.error(f"Unable to update asset: {old_asset['id']}. Received {response}")
+            return None
+
+        return response['payload']
+
+    return old_asset
 
 
 # Function that checks in an asset in snipe
@@ -648,7 +718,7 @@ def checkout_snipe_asset(username, asset):
         return False
 
     logging.info(f"Asset {asset['name']} is being checked out to {username}")
-    logging.debug(asset)
+    # logging.debug(asset)
 
     user_id = get_snipe_user_id(username)
 
@@ -790,13 +860,10 @@ def query_apple_warranty(serial, model_name=None):
 
 def main():
     global USER_ARGS
-    # Do some tests to see if the hosts are up. Don't use hooks for these as we don't have tokens yet.
-    logging.info("Running tests to see if hosts are up.")
-
     # Get a list of known models from Snipe
     logging.info("Getting a list of computer models that snipe knows about.")
     modelnumbers = get_snipe_models()
-    logging.info(f"Our list of models has {len(modelnumbers)} entries.")
+    logging.debug(f"Our list of models has {len(modelnumbers)} entries.")
     logging.debug(f"Model list: {modelnumbers}")
 
     # Get a list of computers from JAMF
@@ -903,27 +970,8 @@ def main():
             'serial_number': serial_number,
             'asset_tag': asset_tag,
             'model_id': modelnumbers[model_jamf_id],
-            'status_id': CONFIG['snipe-it']['default_status_id']
+            'status_id': int(CONFIG['snipe-it']['default_status_id'])
         }
-
-        if jamf_asset['purchasing']:
-            purchase_cost = jamf_asset['purchasing'].get('purchasePrice', 0)
-            if purchase_cost:
-                asset['purchase_cost'] = purchase_cost
-            lease_date = jamf_asset['purchasing'].get('leaseDate', None)
-            purchase_date = jamf_asset['purchasing'].get('poDate', lease_date)
-            if purchase_date:
-                asset['purchase_date'] = purchase_date
-                warranty_ends = jamf_asset['purchasing'].get('warrantyDate', None)
-                if warranty_ends:
-                    asset['warranty_months'] = (datetime.strptime(warranty_ends, "%Y-%m-%d") - datetime.strptime(
-                        purchase_date, "%Y-%m-%d")).days // 30
-            else:
-                logging.debug(f"Asset {jamf_id} has no purchase date, making a guess")
-                purchase_date = query_apple_warranty(serial_number, model_jamf_name)
-                if purchase_date:
-                    asset['purchase_date'] = purchase_date.strftime("%Y-%m-%d")
-                    asset['warranty_months'] = 36
 
         # Get MAC addresses
         raw_macs = []
@@ -949,7 +997,7 @@ def main():
                                        asset_tag=asset_tag)
 
         if snipe_assets['total'] > 1:
-            logging.warning(f"Found {len(snipe_asset)} assets with serial {serial_number}, skipping")
+            logging.warning(f"Found {len(snipe_assets)} assets with serial {serial_number}, skipping")
             continue
 
         for api_key in api_mapping:
@@ -962,46 +1010,23 @@ def main():
         if not snipe_assets or snipe_assets['total'] == 0:
             # Create a new asset
             logging.info(f"Creating a new asset in snipe for JAMF ID: {jamf_id}")
+            asset = parse_purchasing(asset, jamf_asset, model_jamf_name, serial_number)
             snipe_asset = create_snipe_asset(asset)
-            # If new asset, then snipe update time = jamf update time
-            snipe_update_time = jamf_update_time
         else:
             logging.info(f"Asset exists in snipe for JAMF ID: {jamf_id}")
             snipe_asset = snipe_assets['rows'][0]
             logging.debug(snipe_asset)
             # Snipe formats 2023-10-11 11:43:34
             snipe_update_time = datetime.strptime(snipe_asset['updated_at']['datetime'], "%Y-%m-%d %H:%M:%S")
-
-        # Check if we need updating
-        if USER_ARGS.force or snipe_update_time < jamf_update_time:
-            # Update the asset
-            logging.info(f"Updating asset in snipe for JAMF ID: {jamf_id}")
-
             if asset_tag.startswith(asset_tag_prefix):
                 del asset['asset_tag']
 
-            if snipe_asset['status_label']['id'] > 1:
-                del asset['status_id']
+            if not snipe_asset['warranty_months'] or not snipe_asset['purchase_date']:
+                asset = parse_purchasing(asset, jamf_asset, model_jamf_name, serial_number)
 
-            # Clean up custom fields
-            for custom_field in snipe_asset['custom_fields'].values():
-                logging.debug(custom_field)
-                snipe_field = custom_field['field']
-                if snipe_field in asset.keys():
-                    logging.debug(f"Updating {custom_field} from "
-                                  f"{custom_field['value']} "
-                                  f"to {asset[snipe_field]}")
-                    # JAMF inconsistently returns version numbers for 14.0 as either 14.0.0 or 14.0
-                    str_field_value = str(custom_field['value'])
-                    str_asset_value = str(asset[snipe_field])
-                    if str_field_value == str_asset_value or \
-                            str_field_value == str_asset_value + ".0" or \
-                            str_field_value + ".0" == str_asset_value:
-                        del asset[snipe_field]
-                        continue
-
-            if asset:
-                update_snipe_asset(snipe_asset['id'], asset)
+            # Check if we need updating
+            if USER_ARGS.force or snipe_update_time < jamf_update_time:
+                snipe_asset = update_snipe_asset(snipe_asset, asset)
 
         # Checking out
         # Username could be in assigned_to
@@ -1013,6 +1038,36 @@ def main():
                 update_jamf_mobiledevice_asset_tag(jamf_id, asset_tag)
             else:
                 update_jamf_computer_asset_tag(jamf_id, asset_tag)
+
+    logging.info(f"Cache hits: {CACHE['hits']}\n"
+                 f"Cache size:\n"
+                 f"{len(CACHE['MAC'])} MACs\n"
+                 f"{len(CACHE['NAME'])} names\n"
+                 f"{len(CACHE['SERIAL'])} serials\n"
+                 f"{len(CACHE['ASSET_TAG'])} asset tags\n")
+
+
+def parse_purchasing(update_dict, jamf_asset, model_jamf_name, serial_number):
+    if 'purchasing' in jamf_asset and jamf_asset['purchasing']:
+        purchase_cost = jamf_asset['purchasing'].get('purchasePrice', 0)
+        if purchase_cost:
+            update_dict['purchase_cost'] = purchase_cost
+        lease_date = jamf_asset['purchasing'].get('leaseDate', None)
+        purchase_date = jamf_asset['purchasing'].get('poDate', lease_date)
+        if purchase_date:
+            update_dict['purchase_date'] = purchase_date
+            warranty_ends = jamf_asset['purchasing'].get('warrantyDate', None)
+            if warranty_ends:
+                update_dict['warranty_months'] = (datetime.strptime(warranty_ends, "%Y-%m-%d") - datetime.strptime(
+                    purchase_date, "%Y-%m-%d")).days // 30
+        else:
+            logging.debug(f"Asset has no purchase date, making a guess")
+            purchase_date = query_apple_warranty(serial_number, model_jamf_name)
+            if purchase_date:
+                update_dict['purchase_date'] = purchase_date.strftime("%Y-%m-%d")
+                update_dict['warranty_months'] = 36
+
+    return update_dict
 
 
 if __name__ == "__main__":

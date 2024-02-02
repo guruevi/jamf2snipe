@@ -32,7 +32,7 @@ default_status_id = 4
 # EDIT THESE FIELDS SO THEY CORRESPOND WITH THE CUSTOM FIELD DB COLUMN NAMES IN YOUR SNIPE-IT INSTANCE
 [computers-api-mapping]
 name = general name | {{ var|upper }}
-serial_number = hardware serialNumber | {{ var|upper }}
+serial = hardware serialNumber | {{ var|upper }}
 asset_tag = hardware assetTag | {{ var|upper }}
 _snipeit_mac_address_1 = hardware macAddress | {{ validate_mac(var) }}
 _snipeit_ram_2 = hardware totalRamMegabytes
@@ -43,10 +43,11 @@ _snipeit_os_version_9 = operatingSystem version
 _snipeit_os_build_10 = operatingSystem build
 _snipeit_ip_address_13 = general lastIpAddress
 _snipeit_cpu_name_14 = hardware processorType
+_snipeit_management_40 = | {{ 'JAMF' }}
 
 [mobile_devices-api-mapping]
 name = general name | {{ var|upper }}
-serial_number = hardware serialNumber | {{ var|upper }}
+serial = hardware serialNumber | {{ var|upper }}
 asset_tag = hardware assetTag | {{ var|upper }}
 _snipeit_imei_4 = network imei
 _snipeit_mac_address_1 = hardware wifiMacAddress
@@ -56,6 +57,7 @@ _snipeit_operating_system_8 = deviceType
 _snipeit_os_version_9 = general osVersion
 _snipeit_os_build_10 = general osBuild
 _snipeit_ip_address_13 = general ipAddress
+_snipeit_management_40 = | {{ 'JAMF' }}
 
 [user-mapping] # The field from jamf that you want to search Snipe with
 mobile_api_field = userAndLocation username
