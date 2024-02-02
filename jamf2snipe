@@ -14,6 +14,8 @@
 #
 # CONFIGURATION:
 #   See README.md
+from __future__ import annotations
+
 import html
 import re
 
@@ -572,20 +574,20 @@ def jamf_api_call(endpoint, payload=None, method="GET"):
 
 
 # Function to get all the asset models (and cache them)
-@lru_cache(maxsize=None)
 def get_snipe_models(page=0):
     page_size = 500
-    limits = {
+    payload = {
         'limit': page_size,
         'offset': page * page_size
     }
     models = {}
-    response = snipe_api_call("models", payload=limits)
+    response = snipe_api_call("models", payload=payload, method="GET")
 
     # This happens if there is an error
     if "total" not in response:
         logging.error("Fetching models failed, enable debug to see response")
         raise SystemExit("Necessary Snipe-IT API call failed")
+    logging.debug(f"Fetching models, {payload['offset']}+{payload['limit']}/{response['total']}")
 
     # Quickly end if there are no rows
     if "rows" not in response:
@@ -594,10 +596,10 @@ def get_snipe_models(page=0):
     # Add the models to the dictionary
     for row in response['rows']:
         models[row['model_number']] = row['id']
+        models[row['name']] = row['id']
 
     # If we haven't gotten all the models, get more
-    if limits['offset'] + limits['limit'] < response['total']:
-        logging.debug(f"Fetching more models, currently at: {limits['offset']}/{response['total']}")
+    if response['total'] > payload['limit'] + payload['offset']:
         models.update(get_snipe_models(page + 1))
 
     return models
@@ -608,16 +610,19 @@ def get_snipe_models(page=0):
 def get_snipe_user_id(username):
     if not username:
         return None
-    username = username.lower()
-    response = snipe_api_call("users", method="GET", payload={'username': username})
+
+    payload = {"username": username.lower(), "all": True}
+    response = snipe_api_call(f"users", payload=payload, method="GET")
+
     if 'total' not in response or response['total'] == 0:
+        logging.debug(f"Got a valid response but no users")
         return None
 
     if response['total'] > 1:
-        logging.warning(f"Found {response['total']} users with username {username}, returning none")
+        logging.warning(f"Got multiple responses for a username")
         return None
 
-    return response['rows'][0]['id']
+    return int(response['rows'][0]['id'])
 
 
 # Function that creates a new Snipe Model - not an asset - with a JSON payload
