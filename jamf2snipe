@@ -418,39 +418,28 @@ def validate_mac(mac_address: str | None) -> str | None:
 def get_snipe_asset(serial="", name="", mac_addresses=None, asset_tag=None) -> dict:
     # Asset tags always return 1 result
     if asset_tag:
-        if asset_tag in CACHE["ASSET_TAG"]:
-            return {'rows': [CACHE["ASSET_TAG"][asset_tag]], 'total': 1}
-
         api_url = f'hardware/bytag/{asset_tag}'
         response = snipe_api_call(api_url)
         if 'id' in response:
-            CACHE["ASSET_TAG"][asset_tag] = response
             return {'rows': [response], 'total': 1}
 
-    found = []
     # If we have a valid serial number use that to uniquely identify the asset
     if serial:
-        found = cache_snipe_search(serial, "SERIAL")
+        found = paginated_snipe_search(serial)
+        if found['total'] == 1:
+            return found
 
     if mac_addresses:
         # MAC addresses *should* be unique
         for mac_address in mac_addresses:
-            if found:
-                break
-            found = cache_snipe_search(mac_address, "MAC")
+            found = paginated_snipe_search(mac_address)
+            if found['total'] == 1:
+                return found
 
-    # If we have a name, we can search for that
-    if not found:
-        found = cache_snipe_search(name, "NAME")
-
-    # Make a list from the found dict
-    return {'rows': found, 'total': len(found)}
+    return {'rows': [], 'total': 0}
 
 
-CACHE = {"MAC": {}, "NAME": {}, "SERIAL": {}, "ASSET_TAG": {}, 'hits': 0}
-
-
-def paginated_snipe_search(search, page=0):
+def paginated_snipe_search(search: str, page=0):
     page_size = 500
     payload = {
         'search': search,
@@ -469,30 +458,6 @@ def paginated_snipe_search(search, page=0):
 
     logging.debug(response)
     return response
-
-
-def cache_snipe_search(search: str, search_type: str) -> list:
-    search = search.upper()
-    if search in CACHE[search_type]:
-        CACHE['hits'] = CACHE['hits'] + 1
-        return [CACHE[search_type][search]]
-
-    # We search only the first 5 characters, that way we don't need to re-search for similar names
-    response = paginated_snipe_search(search.upper()[0:5])
-
-    for row in response['rows']:
-        for field_name, field in row['custom_fields'].items():
-            if field['field_format'] == 'MAC':
-                CACHE["MAC"][field['value'].upper()] = row
-
-        CACHE["NAME"][html.unescape(row['name']).upper()] = row
-        CACHE["SERIAL"][row['serial'].upper()] = row
-        CACHE["ASSET_TAG"][row['asset_tag'].upper()] = row
-
-    if search.upper() in CACHE[search_type]:
-        return [CACHE[search_type][search.upper()]]
-
-    return []
 
 
 # Helper function to call an API
@@ -809,7 +774,7 @@ def get_config_value(config_key, data, invalid_values=None):
 def clean_tag(param: str) -> str:
     # Remove illegal values
     if not param or str(param).lower() in ["unknown", "not available", "0", "n/a", "none", ""]:
-        return None
+        return ""
 
     return param
 
@@ -825,11 +790,11 @@ def query_apple_warranty(serial, model_name=None):
         logging.warning(f"No year found in model name {model_name}, skipping {serial}")
         if model_name == 'Mac Studio':
             return date(year=2022, month=3, day=18)
-
         return None
     year = int(year_re.group())
 
-    if len(serial) == 11:
+    # Apple changed format in 2010
+    if len(serial) == 11 and year < 2013:
         # Old format
         year = serial[2].lower()
         est_year = 2000 + '   3456789012'.index(year)
@@ -840,7 +805,7 @@ def query_apple_warranty(serial, model_name=None):
             year_time += week_dif
 
         return year_time
-    # Apple starts randomizing serial numbers in 2021
+    # Changed format until 2020 after which they are truly randomized
     elif year < 2021 and 11 < len(serial) < 16:
         # New format
         alpha_year = 'cdfghjklmnpqrstvwxyz'
@@ -963,7 +928,7 @@ def main():
                 "name": model_jamf_name,
                 "model_number": model_jamf_id,
                 "category_id": category_id,
-                "eol": CONFIG['snipe-it'].get('default_eol', 84)
+                "eol": int(CONFIG['snipe-it'].get('default_eol', "84"))
             }
             if custom_fieldset_id:
                 model['fieldset_id'] = int(CONFIG['snipe-it']['computer_custom_fieldset_id'])
@@ -1044,18 +1009,16 @@ def main():
             else:
                 update_jamf_computer_asset_tag(jamf_id, asset_tag)
 
-    logging.info(f"Cache hits: {CACHE['hits']}\n"
-                 f"Cache size:\n"
-                 f"{len(CACHE['MAC'])} MACs\n"
-                 f"{len(CACHE['NAME'])} names\n"
-                 f"{len(CACHE['SERIAL'])} serials\n"
-                 f"{len(CACHE['ASSET_TAG'])} asset tags\n")
-
 
 def parse_purchasing(update_dict, jamf_asset, model_jamf_name, serial_number):
     if 'purchasing' in jamf_asset and jamf_asset['purchasing']:
         purchase_cost = jamf_asset['purchasing'].get('purchasePrice', 0)
         if purchase_cost:
+            try:
+                # Strip off any currency symbols, parse to float
+                purchase_cost = float(re.sub(r'[^\d.]', '', purchase_cost))
+            except ValueError:
+                purchase_cost = 0
             update_dict['purchase_cost'] = purchase_cost
         lease_date = jamf_asset['purchasing'].get('leaseDate', None)
         purchase_date = jamf_asset['purchasing'].get('poDate', lease_date)
