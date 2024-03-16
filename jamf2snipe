@@ -617,8 +617,9 @@ def update_snipe_asset(old_asset, new_asset):
     if 'serial_number' in new_asset and old_asset['serial'] == new_asset['serial_number']:
         del new_asset['serial_number']
 
+    # We compare >= so custom status changes are not overridden
     if ('status_id' in new_asset and old_asset['status_label'] and
-            old_asset['status_label']['id'] == new_asset['status_id']):
+            old_asset['status_label']['id'] >= new_asset['status_id']):
         del new_asset['status_id']
 
     if 'model_id' in new_asset and old_asset['model'] and old_asset['model']['id'] == new_asset['model_id']:
